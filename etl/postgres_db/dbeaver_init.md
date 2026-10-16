@@ -65,3 +65,9 @@ CREATE TABLE IF NOT EXISTS games (
     created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+
+## Visualization
+
+When finished to run the postgres_load.py, check the DBEAVER desktop to see if the loading is worked.
+
+![dbeaver_visu](../../img/etl_postgres.png)
