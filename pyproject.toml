@@ -1,11 +1,12 @@
 [project]
 name = "chessgraph-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Read-only MCP servers for personalized chess coaching"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "chess>=1.11.2",
+    "mcp[cli]>=2.3.0",
     "neo4j>=6.4.1",
     "pandas>=3.0.6",
     "polars>=2.0.0",
@@ -15,3 +16,21 @@ dependencies = [
     "python-dotenv>=1.2.4",
     "sqlalchemy>=2.1.4",
 ]
+
+[project.scripts]
+chessgraph-postgres-mcp = "chess_mcp.postgres.server:main"
+chessgraph-neo4j-mcp = "chess_mcp.neo4j.server:main"
+chessgraph-stockfish-mcp = "chess_mcp.stockfish.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
