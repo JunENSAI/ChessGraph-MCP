@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "chess>=1.11.2",
+    "neo4j>=6.4.1",
     "pandas>=3.0.6",
     "polars>=2.0.0",
     "psycopg2-binary>=2.9.13",

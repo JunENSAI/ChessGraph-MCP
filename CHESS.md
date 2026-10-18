@@ -2,7 +2,7 @@
 
 In my perspective, Chess belongs to those games called : `Strategic & Analytic Game`.
 
-Chess is a known board game that has $8 \times 8$ dimensions. It's regularly played between two players but it has some variants that can be played by more than $2$ players. In case of two player, there is two sides : **White pieces** and **Black pieces**. In the beginning, each players have $16$ pieces on the board [*if counted distinctly by type, each side have $6$ pieces*]. The player who plays with the white pieces begin the game. So, often strong players who played this games about decade call this `having the initiative on the game`.
+Chess is a known board game that has $8 \times 8$ dimensions. It's regularly played by two players but it has some variants that can be played by more than $2$ players. In case of two player, there is two sides : **White pieces** and **Black pieces**. In the beginning, each players have $16$ pieces on the board [*if counted distinctly by type, each side have $6$ pieces*]. The player who plays with the white pieces begin the game. So, often strong players who played this games about decade call this `having the initiative on the game`.
 
 ![chessboard](./img/chessboard.png)
 
@@ -76,7 +76,7 @@ But if you want just to play chess for fun on online platform, you need to know 
 
 Chess has some vocabs has its own specific vocabulary :
 
-- **Checkmate** : a situation where the king is under attack [opponent pieces atatcked the square where the king was] and it has no legal move [all the square that he can move are controlled by one or more pieces]. This is the **graal** because when you mate the king, you win the game. But I want to warn you : `When you come at the king, you best not miss`. 
+- **Checkmate** : a situation where the king is under attack [opponent pieces atatcked the square where the king was] and it has no legal move [all the square that he can move are controlled by one or more pieces]. This is the **graal** because when you mate the king, you win the game. But there is a warning : `When you come at the king, you best not miss`. 
 
     ![Checkmate](./img/img_buzzword/checkmate.png)
 
