@@ -67,7 +67,7 @@ run. User-perspective fields depend on `CHESS_USERNAME` at ETL time.
 - `get_recurring_blunder_positions`: find repeated high-loss positions.
 - `get_endgame_context`: retrieve endgame pattern and benchmark context.
 
-The `chessgraph://neo4j/schema` resource documents labels, relationships, and
+The `chessgraph-neo4j://schema` resource documents labels, relationships, and
 ETL caveats. Traversals are anchored, parameterized, depth-capped, and
 result-capped. There is no arbitrary Cypher tool.
 
@@ -106,9 +106,9 @@ uv run pytest
 Open one server in the official MCP Inspector:
 
 ```bash
-uv run mcp dev chessgraph_mcp/postgres/server.py
-uv run mcp dev chessgraph_mcp/neo4j/server.py
-uv run mcp dev chessgraph_mcp/stockfish/server.py
+uv run mcp dev chess_mcp/postgres/server.py
+uv run mcp dev chess_mcp/neo4j/server.py
+uv run mcp dev chess_mcp/stockfish/server.py
 ```
 
 Database integration tests are opt-in so the normal suite never depends on
