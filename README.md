@@ -1,62 +1,205 @@
-# ChessGraph-MCP
+<div align="center">
 
-ChessGraph-MCP combines deterministic engine analysis with personal game data
-and graph knowledge to support an evidence-based chess coach.
+# ChessGraph MCP
 
-## System Architecture
+### A local-first [try] layer for personalized chess coaching
+
+Connect an MCP-capable agent to personal game history, a positional knowledge
+graph, and reproducible Stockfish analysis—without giving the model unrestricted
+database access.
+
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/Model_Context_Protocol-2.3%2B-6C5CE7)](https://modelcontextprotocol.io/)
+[![Stockfish](https://img.shields.io/badge/Stockfish-UCI-4B8BBE)](https://stockfishchess.org/)
+[![License](https://img.shields.io/badge/License-MIT-2EA44F)](LICENSE)
+
+**Deterministic analysis · Personal evidence · Typed MCP tools · Read-only by design**
+
+</div>
+
+---
+
+## Why ChessGraph?
+
+A chess engine can calculate excellent moves, but it does not know your history.
+A database can reveal recurring mistakes, but it cannot calculate the best move
+in a new position. A language model can explain ideas, but it should not invent
+the chess evidence behind them.
+
+ChessGraph MCP separates those responsibilities:
+
+- **Stockfish calculates** candidate moves, evaluations, WDL, and principal variations.
+
+- **PostgreSQL remembers** games, move telemetry, openings, endgames, and historical engine evaluations.
+
+- **Neo4j connects** positions, personal moves, theory moves, transpositions,games, and endgame patterns.
+
+- **Hermes-Agent explains** the combined evidence as a personalized lesson.
+
+> The design principle is simple: **the engine searches, deterministic code
+> validates, the databases provide context, and the model explains only the
+> evidence it receives.**
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph sources [Data sources]
+        pgn["Chess.com PGN archives"]
+        openings["Lichess opening theory"]
+        endgames["Endgame Atlas benchmarks"]
+    end
+
+    subgraph ingestion [Deterministic ingestion]
+        normalizer["ETL and FEN normalization"]
+        backfill["Historical Stockfish backfill"]
+        graphSync["PostgreSQL to Neo4j sync"]
+    end
+
+    subgraph knowledge [Local evidence stores]
+        postgres[("PostgreSQL: games and telemetry")]
+        neo4j[("Neo4j: position graph")]
+    end
+
+    subgraph runtime [MCP runtime]
+        pgMcp["PostgreSQL MCP: 8 tools"]
+        graphMcp["Neo4j MCP: 6 tools"]
+        sfMcp["Stockfish MCP: 3 tools"]
+        stockfish["Stockfish UCI"]
+    end
+
+    host["Hermes-Agent and frontier model"]
+    coach["Evidence-backed coaching response"]
+
+    pgn --> normalizer
+    openings --> normalizer
+    endgames --> normalizer
+    normalizer --> postgres
+    postgres -->|"unevaluated moves"| backfill
+    backfill -->|"scores and CPL"| postgres
+    postgres --> graphSync
+    graphSync --> neo4j
+
+    host -->|"typed MCP calls"| pgMcp
+    host -->|"typed MCP calls"| graphMcp
+    host -->|"typed MCP calls"| sfMcp
+    pgMcp -->|"parameterized reads"| postgres
+    graphMcp -->|"bounded traversals"| neo4j
+    sfMcp -->|"serialized UCI"| stockfish
+    host --> coach
+```
+
+The ETL layer writes data. The MCP runtime does not: all exposed tools are
+read-only and non-destructive; database responses and engine searches are
+bounded for a trusted local stdio client.
+
+## What the agent can ask
+
+| Evidence source | Best suited for | MCP capabilities |
+| --- | --- | --- |
+| PostgreSQL | Game selection, longitudinal statistics, move records, openings, endgames | 8 curated tools, paginated move retrieval, statement timeouts |
+| Neo4j | Theory versus personal choices, transpositions, recurring positions, graph context | 6 curated tools, anchored queries, maximum traversal depth |
+| Stockfish | Fresh position analysis, candidate comparison, WDL, legal variations | MultiPV, same-root move comparison, line validation |
+
+Examples:
+
+- “Show my largest rapid-game mistakes and explain the top three.”
+
+- “Where did I leave opening theory, and what did I usually play instead?”
+
+- “Do different move orders in my games transpose into this position?”
+
+- “Compare my move with Stockfish's best move using the same search budget.”
+
+- “Which endgame patterns recur in my losses?”
+
+## Evidence flow for a coaching answer
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Hermes as Hermes-Agent
+    participant PG as PostgreSQL MCP
+    participant Graph as Neo4j MCP
+    participant SF as Stockfish MCP
+
+    User->>Hermes: Why was this move a mistake?
+    Hermes->>PG: get_game_moves and get_blunders
+    PG-->>Hermes: FEN, played move, CPL, clock, game context
+    Hermes->>Graph: get_position_context and get_position_moves
+    Graph-->>Hermes: Theory, personal choices, recurring patterns
+    Hermes->>SF: compare_move from the same root
+    SF-->>Hermes: Best line, played line, score, WDL, provenance
+    Hermes->>SF: validate_line for any cited continuation
+    SF-->>Hermes: Legal UCI, SAN, and resulting FENs
+    Hermes-->>User: Verified explanation and actionable lesson
+```
+
+## Design guarantees
+
+### Read-only agent access
+
+- No arbitrary SQL or Cypher tools.
+
+- PostgreSQL uses parameterized statements, read-only transactions, local
+  statement timeouts, and result caps.
+
+- Neo4j uses read transactions, parameterized values, indexed anchors, and a
+  hard maximum path depth.
+
+- Database permissions remain the final security boundary; dedicated read-only
+  accounts are recommended.
+
+### Reproducible engine evidence
+
+- Scores are normalized to the player at the root position.
+
+- Centipawn and mate scores remain distinct.
+
+- CPL is computed only when both comparable scores are centipawn scores.
+
+- `compare_move` searches the best and played moves from the same root with the
+  same requested budget.
+
+- Principal variations are legally replayed in UCI and SAN.
+
+- Responses preserve engine identity, options, search limits, depth, nodes, and
+  elapsed engine time when available.
+
+### Shared position identity
+
+PostgreSQL and Neo4j use a four-field normalized FEN:
 
 ```text
-  [Chess.com PGN Archives]        [Hugging Face Datasets (Parquet/CSV)]
-     (1500+ ELO Games)              (ECO Openings & Endgame Theory)
-             │                                     │
-             └──────────────┬──────────────────────┘
-                            ▼
-                ┌───────────────────────┐
-                │   ETL & Normalizer    │  (Python / Polars / python-chess)
-                └───────────┬───────────┘
-                            │
-            ┌───────────────┴───────────────┐
-            ▼                               ▼
-┌───────────────────────┐       ┌───────────────────────┐
-│      PostgreSQL       │       │         Neo4j         │
-│  Game Telemetry & SQL │       │ Positional GraphRAG   │
-│  • Game Type          │       │ • (:Position {fen})   │
-│  • ELO & results      │       │ • [:PLAYED_MOVE]      │
-│  • ACPL / Blunder %   │       │ • [:THEORY_MOVE]      │
-└───────────┬───────────┘       └───────────┬───────────┘
-            │                               │
-            └───────────────┬───────────────┘
-                            ▼
-                ┌───────────────────────┐       ┌───────────────────────┐
-                │     Hermes-Agent      │◄─────►│  Stockfish MCP Server │
-                │  Orchestration Layer  │  MCP  │  • MultiPV Eval       │
-                │  (Cypher + SQL + MCP) │       │  • WDL Probabilities  │
-                └───────────────────────┘       │  • Positional Motifs  │
-                                                └───────────────────────┘
+piece placement · side to move · castling rights · en-passant target
 ```
 
-## Local MCP servers
+Dropping move counters lets different move orders converge on the same position
+key. Stockfish receives a valid six-field FEN generated from that shared key.
 
-The repository provides three modular, read-only MCP servers:
+## Quick start
 
-- PostgreSQL for games, move telemetry, player summaries, openings, endgames,
-  and evaluated mistakes.
-- Neo4j for position context, personal/theory continuations, transpositions,
-  recurring blunders, and endgame relationships.
-- Stockfish for bounded MultiPV analysis, same-root move comparison, WDL,
-  principal variations, and legal-line validation.
+### Prerequisites
 
-They use the official Python MCP SDK v2 and run over stdio for a local host such
-as Hermes-Agent.
+- Python 3.12+
+
+- [`uv`](https://docs.astral.sh/uv/)
+
+- PostgreSQL with the project schema and loaded data
+
+- Neo4j with the synchronized position graph
+
+- A local [Stockfish](https://stockfishchess.org/download/) binary
+
+- An MCP host such as [Hermes-Agent](https://github.com/NousResearch/hermes-agent)
+
+### 1. Install the project
 
 ```bash
-cp .env.template .env
-# Fill in local database credentials and STOCKFISH_PATH.
 uv sync
-uv run pytest
 ```
 
-Installed entry points:
+This installs three executable MCP servers:
 
 ```text
 .venv/bin/chessgraph-postgres-mcp
@@ -64,17 +207,192 @@ Installed entry points:
 .venv/bin/chessgraph-stockfish-mcp
 ```
 
-See [the MCP guide](docs/mcp.md) for the complete tool catalog, read-only role
-recommendations, MCP Inspector usage, and troubleshooting. A Hermes-Agent
-configuration template is available at
-[`agent/hermes-mcp.example.yaml`](agent/hermes-mcp.example.yaml).
+### 2. Configure local services
 
-## Safety and evidence
+```bash
+cp .env.template .env
+```
 
-Database servers expose curated, parameterized reads only. All result sets and
-graph traversal depths are bounded. Stockfish scores retain an explicit point
-of view; mate scores are not converted to fake centipawns; and cited principal
-variations are replayed legally before being returned.
+Set the real values in `.env`:
 
-The MCP layer does not reload ETL data or write analysis back to either
-database. Existing loaders remain under [`etl/`](etl/).
+```dotenv
+POSTGRES_USER=chess_reader
+POSTGRES_PASSWORD=change_me
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+POSTGRES_DB=chess
+CHESS_USERNAME=your_chess_username
+
+NEO4J_URI=bolt://127.0.0.1:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=change_me
+NEO4J_DATABASE=neo4j
+
+STOCKFISH_PATH=/usr/games/stockfish
+```
+
+Search budgets and safety limits are documented in
+[`.env.template`](.env.template).
+
+### 3. Load data if needed
+
+If PostgreSQL and Neo4j are already populated, skip this step. Otherwise,
+create the schemas from [`etl/sql_files/`](etl/sql_files/) and run:
+
+```bash
+uv run python etl/postgres_db/postgres_load.py
+uv run python etl/postgres_db/load_stockfish_eval.py
+uv run python etl/neo4j_db/neo4j_load.py
+```
+
+The loaders mutate or rebuild data; the MCP servers never invoke them.
+
+### 4. Connect Hermes-Agent
+
+Merge [`agent/hermes-mcp.example.yaml`](agent/hermes-mcp.example.yaml) into
+`~/.hermes/config.yaml`, then adjust its absolute executable paths.
+
+Hermes registers tools with a server prefix. For example:
+
+```text
+mcp_chess_postgres_get_blunders
+mcp_chess_neo4j_get_position_moves
+mcp_chess_stockfish_compare_move
+```
+
+PostgreSQL and Neo4j may serve parallel reads. Stockfish parallel calls remain
+disabled because one persistent UCI process is deliberately serialized.
+
+### 5. Verify
+
+```bash
+uv run pytest
+```
+
+Optional live-service tests:
+
+```bash
+CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py
+```
+
+Inspect a server with the official MCP development tooling:
+
+```bash
+uv run mcp dev chess_mcp/stockfish/server.py
+```
+
+## MCP surface
+
+<details>
+<summary><strong>PostgreSQL tools</strong></summary>
+
+| Tool | Purpose |
+| --- | --- |
+| `list_games` | Filter games by player, type, outcome, ECO, and date |
+| `get_game` | Retrieve one game's metadata and PGN movetext |
+| `get_game_moves` | Page through ordered moves, FENs, clocks, and evaluations |
+| `get_player_summary` | Aggregate results and ratings |
+| `get_blunders` | Find the data owner's or a named player's evaluated mistakes |
+| `find_position_occurrences` | Find games containing an exact normalized FEN |
+| `lookup_opening` | Retrieve opening theory for a position |
+| `lookup_endgame_positions` | Retrieve filtered endgame benchmarks |
+
+Resource: `chessgraph://postgres/schema`
+
+</details>
+
+<details>
+<summary><strong>Neo4j tools</strong></summary>
+
+| Tool | Purpose |
+| --- | --- |
+| `get_position_context` | Retrieve a position with opening and endgame links |
+| `get_position_moves` | Compare outgoing personal and theory moves |
+| `find_transpositions` | Find bounded paths to convergent graph positions |
+| `get_game_blunders` | Retrieve graph-linked mistakes for one game |
+| `get_recurring_blunder_positions` | Rank repeated mistake positions |
+| `get_endgame_context` | Retrieve endgame patterns and benchmark positions |
+
+Resource: `chessgraph-neo4j://schema`
+
+</details>
+
+<details>
+<summary><strong>Stockfish tools</strong></summary>
+
+| Tool | Purpose |
+| --- | --- |
+| `analyze_position` | Run bounded depth, node, or time-based MultiPV analysis |
+| `compare_move` | Compare a legal played move with the best move from one root |
+| `validate_line` | Replay UCI moves and return legal SAN/FEN evidence |
+
+Resource: `chessgraph-stockfish://capabilities`
+
+</details>
+
+See [`docs/mcp.md`](docs/mcp.md) and the package-specific READMEs under
+[`chess_mcp/`](chess_mcp/) for contracts, semantics, and extension guidance.
+
+## Project structure
+
+```text
+ChessGraph-MCP/
+├── chess_mcp/                 modular MCP package
+│   ├── postgres/              relational repositories, models, server
+│   ├── neo4j/                 graph repositories, models, server
+│   └── stockfish/             UCI lifecycle, scoring, models, server
+├── etl/
+│   ├── postgres_db/           game, theory, and engine-evaluation loaders
+│   ├── neo4j_db/              graph synchronization
+│   └── sql_files/             PostgreSQL schema
+├── agent/                     Hermes-Agent MCP configuration example
+├── docs/                      operations and MCP reference
+├── tests/                     unit and opt-in integration tests
+├── CHESS.md                   chess-domain reference
+└── STOCKFISH.md               engine and NNUE reference
+```
+
+## Data sources
+
+- Personal PGN archives exported from [Chess.com](https://www.chess.com/)
+- [Lichess chess openings](https://huggingface.co/datasets/Lichess/chess-openings)
+- [Endgame Atlas Bench](https://huggingface.co/datasets/Agusanso/EndgameAtlasBench)
+
+Dataset licenses and terms remain those of their respective publishers. Personal
+game records may contain usernames and should be treated as private data.
+
+## Current scope
+
+ChessGraph MCP is a local evidence layer, not a complete coaching application.
+It currently provides:
+
+- local stdio MCP transport;
+- read-only runtime tools;
+- existing-data analysis;
+- deterministic validation and typed evidence.
+
+It does not yet provide a production UI, remote HTTP/OAuth deployment, lesson
+persistence, or automatic verification of every natural-language strategic
+claim.
+
+## Documentation
+
+- [MCP setup, security, and troubleshooting](docs/mcp.md)
+
+- [MCP package concepts](chess_mcp/README.md)
+
+- [PostgreSQL server](chess_mcp/postgres/README.md)
+
+- [Neo4j server](chess_mcp/neo4j/README.md)
+
+- [Stockfish server](chess_mcp/stockfish/README.md)
+
+- [Chess concepts](CHESS.md)
+
+- [Stockfish and NNUE concepts](STOCKFISH.md)
+
+- [Official MCP documentation](https://modelcontextprotocol.io/docs)
+
+## License
+
+Released under the [MIT License](LICENSE).
