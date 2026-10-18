@@ -1,0 +1,51 @@
+# Merge this mapping into ~/.hermes/config.yaml after running `uv sync`.
+# Keep secrets in environment variables; do not replace ${...} with passwords.
+mcp_servers:
+  chess_postgres:
+    command: "/home/junior/ChessGraph-MCP/.venv/bin/chessgraph-postgres-mcp"
+    args: []
+    env:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_HOST: "${POSTGRES_HOST}"
+      POSTGRES_PORT: "${POSTGRES_PORT}"
+      POSTGRES_DB: "${POSTGRES_DB}"
+      CHESS_USERNAME: "${CHESS_USERNAME}"
+      POSTGRES_STATEMENT_TIMEOUT_MS: "10000"
+      MCP_MAX_RESULTS: "100"
+    enabled: true
+    timeout: 30
+    connect_timeout: 30
+    supports_parallel_tool_calls: true
+
+  chess_neo4j:
+    command: "/home/junior/ChessGraph-MCP/.venv/bin/chessgraph-neo4j-mcp"
+    args: []
+    env:
+      NEO4J_URI: "${NEO4J_URI}"
+      NEO4J_USER: "${NEO4J_USER}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE}"
+      NEO4J_MAX_PATH_DEPTH: "4"
+      MCP_MAX_RESULTS: "100"
+    enabled: true
+    timeout: 30
+    connect_timeout: 30
+    supports_parallel_tool_calls: true
+
+  chess_stockfish:
+    command: "/home/junior/ChessGraph-MCP/.venv/bin/chessgraph-stockfish-mcp"
+    args: []
+    env:
+      STOCKFISH_PATH: "${STOCKFISH_PATH}"
+      STOCKFISH_DEFAULT_DEPTH: "15"
+      STOCKFISH_MAX_DEPTH: "30"
+      STOCKFISH_MAX_NODES: "5000000"
+      STOCKFISH_MAX_TIME_MS: "30000"
+      STOCKFISH_MAX_MULTIPV: "5"
+      STOCKFISH_THREADS: "1"
+      STOCKFISH_HASH_MB: "128"
+    enabled: true
+    timeout: 120
+    connect_timeout: 30
+    supports_parallel_tool_calls: false
