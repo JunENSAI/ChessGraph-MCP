@@ -32,7 +32,9 @@ ChessGraph MCP separates those responsibilities:
 
 - **PostgreSQL remembers** games, move telemetry, openings, endgames, and historical engine evaluations.
 
-- **Neo4j connects** positions, personal moves, theory moves, transpositions,games, and endgame patterns.
+- **Neo4j connects** positions, personal moves, theory moves, transpositions, games, and endgame patterns.
+
+- **The retrieval API serves** those same reads to the interface, without asking the model to fetch the page.
 
 - **Hermes-Agent explains** the combined evidence as a personalized lesson.
 
@@ -61,13 +63,15 @@ flowchart LR
         neo4j[("Neo4j: position graph")]
     end
 
-    subgraph runtime [MCP runtime]
+    subgraph runtime [Read paths]
+        api["FastAPI retrieval"]
         pgMcp["PostgreSQL MCP: 8 tools"]
         graphMcp["Neo4j MCP: 6 tools"]
         sfMcp["Stockfish MCP: 3 tools"]
         stockfish["Stockfish UCI"]
     end
 
+    ui["React coach"]
     host["Hermes-Agent and frontier model"]
     coach["Evidence-backed coaching response"]
 
@@ -80,6 +84,11 @@ flowchart LR
     postgres --> graphSync
     graphSync --> neo4j
 
+    ui -->|"page facts"| api
+    ui -->|"questions"| host
+    api -->|"repository reads"| postgres
+    api -->|"repository reads"| neo4j
+    api -->|"bounded search"| stockfish
     host -->|"typed MCP calls"| pgMcp
     host -->|"typed MCP calls"| graphMcp
     host -->|"typed MCP calls"| sfMcp
@@ -89,9 +98,11 @@ flowchart LR
     host --> coach
 ```
 
-The ETL layer writes data. The MCP runtime does not: all exposed tools are
-read-only and non-destructive; database responses and engine searches are
-bounded for a trusted local stdio client.
+The ETL layer writes data. The MCP servers and the retrieval API only read.
+They call the same repositories in `chess_mcp/`. MCP tools stay typed and
+bounded for Hermes. The API serves the facts the interface can draw before a
+question is asked, such as the rating-band recap. Hermes explains; it does not
+assemble the page.
 
 ## What the agent can ask
 
@@ -231,9 +242,15 @@ NEO4J_PASSWORD=change_me
 NEO4J_DATABASE=neo4j
 
 STOCKFISH_PATH=/usr/games/stockfish
+
+HERMES_API_URL=http://127.0.0.1:8642/v1
+HERMES_API_KEY=
+BACKEND_URL=http://127.0.0.1:8000
 ```
 
-Search budgets and safety limits are documented in
+`CHESS_USERNAME` is the Chess.com account stored in the games. Keep the real
+value in `.env`. Do not copy it into `AGENTS.md` or the Hermes seeds. Search
+budgets and the other limits are documented in
 [`.env.template`](.env.template).
 
 ### 3. Load data if needed
@@ -269,12 +286,11 @@ Copy the identity seeds before the first coaching session. Hermes loads
 `SOUL.md` only from `$HERMES_HOME`, and memory only from
 `$HERMES_HOME/memories/`. See [`agent/README.md`](agent/README.md).
 
-The UI coach calls Hermes through a Vite proxy. Set `HERMES_API_URL` and
-`HERMES_API_KEY` from [`.env.template`](.env.template); `HERMES_API_KEY`
-must match `API_SERVER_KEY` in `~/.hermes/.env`. The Vite dev and preview
-servers add the bearer header, so the key stays on the server side; do not
-expose it as a `VITE_` variable. The board content in `ui/src/data/demo.ts` is
-still demo data.
+The coach panel calls Hermes through a Vite proxy. Set `HERMES_API_URL` and
+`HERMES_API_KEY` from [`.env.template`](.env.template). `HERMES_API_KEY` must
+match `API_SERVER_KEY` in `~/.hermes/.env`. The Vite dev and preview servers
+add the bearer header, so the key stays on the server side. Do not expose it
+as a `VITE_` variable.
 
 ### 5. Verify
 
@@ -294,11 +310,19 @@ Inspect a server with the official MCP development tooling:
 uv run mcp dev chess_mcp/stockfish/server.py
 ```
 
-### 6. Run the UI
+### 6. Run the retrieval API
 
-The React interface lives in [`ui/`](ui/) and starts independently of the MCP
-servers. It currently uses demo games and statistics while Hermes-Agent is not
-connected.
+```bash
+uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+The UI proxies `/api` to `BACKEND_URL`. Routes cover the rating-band recap,
+game and move reads, opening-file lookup, Neo4j position context, and a
+bounded Stockfish search. See [`backend/README.md`](backend/README.md). The
+Stockfish route starts its own engine on first use. Hermes continues to use
+the separate engine inside the Stockfish MCP server.
+
+### 7. Run the UI
 
 ```bash
 cd ui
@@ -307,7 +331,11 @@ npm run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
-Training, My games, and Recap.
+Training, My games, and Recap. Recap counts stored games through
+`GET /api/recap`. The favorite line in a rating band is the stored opening
+name with the most games, so a line that was played can still rank behind a
+larger one. Training lessons and the game library in
+[`ui/src/data/demo.ts`](ui/src/data/demo.ts) are still sample content.
 
 Other UI commands:
 
@@ -384,7 +412,8 @@ ChessGraph-MCP/
 │   ├── postgres_db/           game, theory, and engine-evaluation loaders
 │   ├── neo4j_db/              graph synchronization
 │   └── sql_files/             PostgreSQL schema
-├── ui/                        React coach interface (demo data)
+├── backend/                   FastAPI reads for the UI
+├── ui/                        React coach; recap from the API, lessons still demo
 ├── agent/                     Hermes persona, memory seeds, MCP config example
 ├── docs/                      operations and MCP reference
 ├── tests/                     unit and opt-in integration tests
@@ -406,23 +435,24 @@ game records may contain usernames and should be treated as private data.
 ChessGraph MCP is a local evidence layer, not a complete coaching application.
 It currently provides:
 
-- local stdio MCP transport;
+- local stdio MCP transport for Hermes;
+- a FastAPI retrieval process for the interface, using the same repositories;
 - read-only runtime tools;
 - existing-data analysis;
 - deterministic validation and typed evidence;
 - a local React interface for training, game review, and rating-band recap.
 
 Committed Hermes seeds live in [`agent/`](agent/) (`SOUL.md`, `MEMORY.md`,
-`USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The gateway
-connection is configured as `HERMES_API_URL` and `HERMES_API_KEY` in
-[`.env.template`](.env.template). The coach panel calls that API through the
-Vite proxy and answers from the MCP evidence. Game and opening content in
-[`ui/src/data/demo.ts`](ui/src/data/demo.ts) is still demo data and is not yet
-loaded from PostgreSQL. Remote HTTP/OAuth deployment, lesson persistence, and
+`USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The coach
+panel calls Hermes through the Vite proxy and answers from the MCP evidence.
+The recap is counted from PostgreSQL. Lesson lines and the game library are
+still demo content. Remote HTTP/OAuth deployment, lesson persistence, and
 automatic verification of every natural-language strategic claim are also
 outside the current scope.
 
 ## Documentation
+
+- [Retrieval API](backend/README.md)
 
 - [Coach interface](ui/README.md)
 

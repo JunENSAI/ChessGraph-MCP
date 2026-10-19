@@ -41,12 +41,12 @@ not yet loaded from PostgreSQL.
 the played move and the Stockfish alternative drawn as arrows, a navigable
 move list, a 3D position graph, and a Hermes review.
 
-**Recap** — rating bands counted from the PostgreSQL `games` table (under 1700,
-1700–1799, 1800–1899, 1900–1999, and 2000+). The headline on each opening card
-is the stored line with the most games in that band. Cards cover White lines,
-Black lines, win rate by color, and results by time control. Endgame types are
-not stored on the games, so the recap does not invent them. The dev and preview
-servers expose this as `GET /api/recap`.
+**Recap** — rating bands from `GET /api/recap`. Vite proxies that path to the
+FastAPI process (`BACKEND_URL`, default `http://127.0.0.1:8000`). The headline
+on each opening card is the stored line with the most games in that band.
+Cards cover White lines, Black lines, win rate by color, and results by time
+control. Endgame types are not stored on the games, so the recap does not
+invent them.
 
 ## Chess clock
 

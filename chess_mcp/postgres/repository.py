@@ -24,6 +24,7 @@ from .models import (
     PositionOccurrence,
     UserOutcome,
 )
+from .recap import BAND_SQL, RecapPayload, build_recap
 
 
 _SET_TIMEOUT = text(
@@ -462,3 +463,54 @@ class PostgresRepository:
             },
         )
         return normalized_fen, [EndgamePosition.model_validate(row) for row in rows]
+
+    def get_rating_recap(self) -> RecapPayload:
+        """Count stored games by rating band, color, opening line, and clock."""
+        opening_rows = [
+            (
+                row["band"],
+                row["user_color"],
+                row["opening_name"],
+                row["eco_code"],
+                row["user_outcome"],
+                row["amount"],
+            )
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT
+                        {BAND_SQL} AS band,
+                        user_color,
+                        COALESCE(NULLIF(opening_name, ''), 'Unclassified') AS opening_name,
+                        COALESCE(NULLIF(eco_code, ''), '—') AS eco_code,
+                        user_outcome,
+                        count(*) AS amount
+                    FROM games
+                    WHERE user_color IN ('white', 'black')
+                      AND user_outcome IN ('win', 'loss', 'draw')
+                    GROUP BY 1, 2, 3, 4, 5
+                    """
+                ),
+                {},
+            )
+        ]
+        time_rows = [
+            (row["band"], row["game_type"], row["user_outcome"], row["amount"])
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT
+                        {BAND_SQL} AS band,
+                        game_type::text AS game_type,
+                        user_outcome,
+                        count(*) AS amount
+                    FROM games
+                    WHERE user_color IN ('white', 'black')
+                      AND user_outcome IN ('win', 'loss', 'draw')
+                    GROUP BY 1, 2, 3
+                    """
+                ),
+                {},
+            )
+        ]
+        return build_recap(opening_rows, time_rows)
