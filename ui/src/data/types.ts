@@ -71,3 +71,25 @@ export interface RatingBand {
   defensesBlack: OpeningStat[]
   endgames: EndgameStat[]
 }
+
+export interface TimeControlStat {
+  id: GameCategory
+  label: string
+  results: OutcomeCounts
+}
+
+/** Recap band counted from stored games. Endgame types are not on those rows. */
+export interface RecapBand {
+  id: string
+  label: string
+  white: OutcomeCounts
+  black: OutcomeCounts
+  openingsWhite: OpeningStat[]
+  defensesBlack: OpeningStat[]
+  timeControls: TimeControlStat[]
+}
+
+export interface RecapPayload {
+  gameCount: number
+  bands: RecapBand[]
+}

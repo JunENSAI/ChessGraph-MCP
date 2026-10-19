@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import react from '@vitejs/plugin-react'
-import { defineConfig, loadEnv, type ProxyOptions } from 'vite'
+import { defineConfig, loadEnv, type Connect, type Plugin, type ProxyOptions } from 'vite'
 
 const uiRoot = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(uiRoot, '..')
@@ -47,8 +48,38 @@ function hermesApiProxy(mode: string): Record<string, ProxyOptions> {
   }
 }
 
+function recapApi(): Plugin {
+  const handle: Connect.NextHandleFunction = (req, res, next) => {
+    const url = req.url?.split('?')[0]
+    if (url !== '/api/recap') {
+      next()
+      return
+    }
+    const python = path.join(projectRoot, '.venv/bin/python')
+    const script = path.join(projectRoot, 'ui/scripts/recap_stats.py')
+    const result = spawnSync(python, [script], { cwd: projectRoot, encoding: 'utf8' })
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    if (result.status !== 0) {
+      res.statusCode = 503
+      res.end(JSON.stringify({ error: (result.stderr || 'Recap query failed.').trim() }))
+      return
+    }
+    res.end(result.stdout)
+  }
+
+  return {
+    name: 'chessgraph-recap',
+    configureServer(server) {
+      server.middlewares.use(handle)
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handle)
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => ({
-  plugins: [react()],
+  plugins: [react(), recapApi()],
   server: { proxy: hermesApiProxy(mode) },
   preview: { proxy: hermesApiProxy(mode) },
 }))

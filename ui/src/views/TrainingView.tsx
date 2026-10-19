@@ -243,11 +243,11 @@ export function TrainingView() {
         }
       />
 
-      <section className="panel tracks-panel" aria-label="Personalized training tracks">
+      <section className="panel tracks-panel" aria-label="Sample lessons">
         <header className="panel-head">
           <div>
-            <h2 className="panel-title">Personalized tracks</h2>
-            <p className="panel-subtitle">Opening · defense · endgame</p>
+            <h2 className="panel-title">Sample lessons</h2>
+            <p className="panel-subtitle">Demo lines, not your repertoire</p>
           </div>
         </header>
         <div className="scroll-pane">

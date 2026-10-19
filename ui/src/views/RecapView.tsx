@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
-import { Crown, Flag, Shield, Swords, Trophy } from 'lucide-react'
+import { Shield, Swords, Timer, Trophy } from 'lucide-react'
 import {
   Bar,
   BarChart,
@@ -12,9 +12,9 @@ import {
   YAxis,
 } from 'recharts'
 import { StatCard } from '../components/StatCard'
-import { RATING_BANDS } from '../data/demo'
-import type { OpeningStat, RatingBand } from '../data/types'
-import { combine, share, totalGames, winRate } from '../lib/stats'
+import { busiestBand, chartLabel, loadRecap, mostPlayedClock, mostPlayedLine } from '../data/recap'
+import type { OpeningStat, RecapBand, RecapPayload, TimeControlStat } from '../data/types'
+import { share, totalGames, winRate } from '../lib/stats'
 
 const AXIS = { fill: '#8d96a5', fontSize: 11 }
 const GRID = '#232a35'
@@ -23,11 +23,12 @@ const TOOLTIP = {
   labelStyle: { color: '#f3f5f7' },
   cursor: { fill: 'rgba(255,255,255,0.04)' },
 }
-const COLORS = { win: '#b8f05a', draw: '#8d96a5', loss: '#ff7b72', white: '#f3f5f7', black: '#77a7ff' }
+const COLORS = { win: '#b8f05a', draw: '#8d96a5', loss: '#ff7b72' }
 
 function repertoireRows(items: OpeningStat[]) {
   return items.map(item => ({
-    name: item.name,
+    name: chartLabel(item.name, item.eco),
+    fullName: item.name,
     eco: item.eco,
     Wins: item.results.wins,
     Draws: item.results.draws,
@@ -45,7 +46,7 @@ function RepertoireChart({ items }: { items: OpeningStat[] }) {
           <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
             <CartesianGrid stroke={GRID} horizontal={false} />
             <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
-            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={120} />
+            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={210} />
             <Tooltip {...TOOLTIP} />
             <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar dataKey="Wins" stackId="r" fill={COLORS.win} radius={[4, 0, 0, 4]} />
@@ -65,8 +66,8 @@ function RepertoireChart({ items }: { items: OpeningStat[] }) {
         </thead>
         <tbody>
           {rows.map(row => (
-            <tr key={row.name}>
-              <td>{row.name}</td>
+            <tr key={`${row.fullName}-${row.eco}`}>
+              <td>{row.fullName}</td>
               <td>{row.eco}</td>
               <td>{row.Wins + row.Draws + row.Losses}</td>
               <td>{row.winRate}%</td>
@@ -78,7 +79,7 @@ function RepertoireChart({ items }: { items: OpeningStat[] }) {
   )
 }
 
-function ColorResultsChart({ band }: { band: RatingBand }) {
+function ColorResultsChart({ band }: { band: RecapBand }) {
   const rows = (['white', 'black'] as const).map(color => {
     const counts = band[color]
     const total = totalGames(counts)
@@ -113,68 +114,123 @@ function ColorResultsChart({ band }: { band: RatingBand }) {
   )
 }
 
-function EndgamePatternChart({ band }: { band: RatingBand }) {
-  const rows = band.endgames.map(item => ({
+function TimeControlChart({ items }: { items: TimeControlStat[] }) {
+  const rows = items.map(item => ({
     name: item.label,
-    'With White': totalGames(item.white),
-    'With Black': totalGames(item.black),
+    Wins: item.results.wins,
+    Draws: item.results.draws,
+    Losses: item.results.losses,
+    winRate: winRate(item.results),
+    games: totalGames(item.results),
   }))
   return (
-    <div className="chart">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
-          <CartesianGrid stroke={GRID} horizontal={false} />
-          <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
-          <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={150} />
-          <Tooltip {...TOOLTIP} />
-          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar dataKey="With White" stackId="e" fill={COLORS.white} />
-          <Bar dataKey="With Black" stackId="e" fill={COLORS.black} radius={[0, 4, 4, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <>
+      <div className="chart short">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
+            <CartesianGrid stroke={GRID} horizontal={false} />
+            <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
+            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={80} />
+            <Tooltip {...TOOLTIP} />
+            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
+            <Bar dataKey="Wins" stackId="t" fill={COLORS.win} />
+            <Bar dataKey="Draws" stackId="t" fill={COLORS.draw} />
+            <Bar dataKey="Losses" stackId="t" fill={COLORS.loss} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <table className="stat-table">
+        <thead>
+          <tr>
+            <th>Time control</th>
+            <th>Games</th>
+            <th>Win rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr key={row.name}>
+              <td>{row.name}</td>
+              <td>{row.games}</td>
+              <td>{row.winRate}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   )
 }
 
-function EndgameWinChart({ band }: { band: RatingBand }) {
-  const rows = band.endgames.map(item => ({
-    name: item.label,
-    White: winRate(item.white),
-    Black: winRate(item.black),
-  }))
-  return (
-    <div className="chart">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ right: 12 }}>
-          <CartesianGrid stroke={GRID} vertical={false} />
-          <XAxis dataKey="name" tick={AXIS} axisLine={false} tickLine={false} interval={0} />
-          <YAxis domain={[0, 100]} unit="%" tick={AXIS} axisLine={false} tickLine={false} width={44} />
-          <Tooltip {...TOOLTIP} formatter={value => `${value}%`} />
-          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar dataKey="White" fill={COLORS.white} radius={[4, 4, 0, 0]} />
-          <Bar dataKey="Black" fill={COLORS.black} radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  )
+function lineCaption(line: OpeningStat | undefined, sideTotal: number): string {
+  if (!line || sideTotal === 0) return 'No games in this band'
+  return `${share(totalGames(line.results), sideTotal)}% of games with these pieces · ${winRate(line.results)}% wins`
 }
 
 export function RecapView() {
-  const [bandId, setBandId] = useState(RATING_BANDS[1].id)
+  const [payload, setPayload] = useState<RecapPayload | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    setPayload(null)
+    setError(null)
+    loadRecap()
+      .then(next => {
+        if (active) setPayload(next)
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : 'The recap could not be loaded.')
+      })
+    return () => {
+      active = false
+    }
+  }, [attempt])
+
+  if (error) {
+    return (
+      <div className="view recap-view">
+        <h2 className="recap-title">Rating-band recap</h2>
+        <p className="panel-subtitle">{error}</p>
+        <button type="button" onClick={() => setAttempt(current => current + 1)}>
+          Try again
+        </button>
+      </div>
+    )
+  }
+
+  if (!payload) {
+    return (
+      <div className="view recap-view">
+        <p className="muted small">Reading your games…</p>
+      </div>
+    )
+  }
+
+  return <RecapBands payload={payload} />
+}
+
+function RecapBands({ payload }: { payload: RecapPayload }) {
+  const initial = busiestBand(payload.bands)
+  const [bandId, setBandId] = useState(initial?.id ?? '')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const band = RATING_BANDS.find(item => item.id === bandId)!
+  const band = payload.bands.find(item => item.id === bandId) ?? initial
+
+  if (!band) {
+    return (
+      <div className="view recap-view">
+        <h2 className="recap-title">Rating-band recap</h2>
+        <p className="panel-subtitle">No games are stored for these rating bands.</p>
+      </div>
+    )
+  }
 
   const toggle = (id: string) => setExpanded(current => (current === id ? null : id))
   const whiteTotal = totalGames(band.white)
   const blackTotal = totalGames(band.black)
-  const topOpening = [...band.openingsWhite].sort((a, b) => totalGames(b.results) - totalGames(a.results))[0]
-  const topDefense = [...band.defensesBlack].sort((a, b) => totalGames(b.results) - totalGames(a.results))[0]
-  const frequentEndgame = [...band.endgames].sort(
-    (a, b) => totalGames(combine(b.white, b.black)) - totalGames(combine(a.white, a.black)),
-  )[0]
-  const endgameTotals = combine(...band.endgames.flatMap(item => [item.white, item.black]))
-  const endgameWhite = combine(...band.endgames.map(item => item.white))
-  const endgameBlack = combine(...band.endgames.map(item => item.black))
+  const topOpening = mostPlayedLine(band.openingsWhite)
+  const topDefense = mostPlayedLine(band.defensesBlack)
+  const topClock = mostPlayedClock(band)
 
   return (
     <div className="view recap-view">
@@ -182,20 +238,24 @@ export function RecapView() {
         <div>
           <h2 className="recap-title">Rating-band recap</h2>
           <p className="panel-subtitle">
-            Select a card to see its statistics · demo profile until the Postgres MCP is connected
+            {payload.gameCount.toLocaleString()} stored games. The headline is the line with the most games in the
+            band, so a line you have played can still rank behind a larger one.
           </p>
         </div>
         <div className="band-switch" role="tablist" aria-label="Rating band">
-          {RATING_BANDS.map(item => (
+          {payload.bands.map(item => (
             <button
               key={item.id}
               type="button"
               role="tab"
-              aria-selected={item.id === bandId}
-              className={item.id === bandId ? 'active' : ''}
-              onClick={() => setBandId(item.id)}
+              aria-selected={item.id === band.id}
+              className={item.id === band.id ? 'active' : ''}
+              onClick={() => {
+                setBandId(item.id)
+                setExpanded(null)
+              }}
             >
-              {item.id === bandId && <motion.span layoutId="band-indicator" className="band-indicator" />}
+              {item.id === band.id && <motion.span layoutId="band-indicator" className="band-indicator" />}
               <span>{item.label}</span>
             </button>
           ))}
@@ -216,18 +276,18 @@ export function RecapView() {
           <strong>{winRate(band.black)}%</strong>
         </div>
         <div>
-          <span className="eyebrow">Endgame win rate</span>
-          <strong>{winRate(endgameTotals)}%</strong>
+          <span className="eyebrow">Most played clock</span>
+          <strong>{topClock ? topClock.label : '—'}</strong>
         </div>
       </div>
 
-      <motion.div layout className="card-grid" key={bandId}>
+      <motion.div layout className="card-grid" key={band.id}>
         <StatCard
           id="openings"
           icon={Swords}
-          title="Favorite openings · White"
-          headline={topOpening.name}
-          caption={`${share(totalGames(topOpening.results), whiteTotal)}% of White games · ${winRate(topOpening.results)}% wins`}
+          title="Most played lines · White"
+          headline={topOpening?.name ?? 'No games'}
+          caption={lineCaption(topOpening, whiteTotal)}
           expanded={expanded === 'openings'}
           onToggle={toggle}
         >
@@ -236,9 +296,9 @@ export function RecapView() {
         <StatCard
           id="defenses"
           icon={Shield}
-          title="Defenses · Black"
-          headline={topDefense.name}
-          caption={`${share(totalGames(topDefense.results), blackTotal)}% of Black games · ${winRate(topDefense.results)}% wins`}
+          title="Most played lines · Black"
+          headline={topDefense?.name ?? 'No games'}
+          caption={lineCaption(topDefense, blackTotal)}
           expanded={expanded === 'defenses'}
           onToggle={toggle}
         >
@@ -256,28 +316,20 @@ export function RecapView() {
           <ColorResultsChart band={band} />
         </StatCard>
         <StatCard
-          id="patterns"
-          icon={Flag}
-          title="Endgame patterns"
-          headline={frequentEndgame.label}
-          caption={`Most frequent · ${totalGames(combine(frequentEndgame.white, frequentEndgame.black))} games`}
-          expanded={expanded === 'patterns'}
+          id="clocks"
+          icon={Timer}
+          title="Results by time control"
+          headline={topClock ? `${topClock.label} · ${totalGames(topClock.results)}` : 'No games'}
+          caption={topClock ? `${winRate(topClock.results)}% wins in that time control` : 'No stored games'}
+          expanded={expanded === 'clocks'}
           onToggle={toggle}
         >
-          <EndgamePatternChart band={band} />
-        </StatCard>
-        <StatCard
-          id="endgame-wins"
-          icon={Crown}
-          title="Endgame win rate"
-          headline={`${winRate(endgameWhite)}% · ${winRate(endgameBlack)}%`}
-          caption="White pieces · Black pieces"
-          expanded={expanded === 'endgame-wins'}
-          onToggle={toggle}
-        >
-          <EndgameWinChart band={band} />
+          <TimeControlChart items={band.timeControls} />
         </StatCard>
       </motion.div>
+      <p className="muted small recap-note">
+        Win rate counts draws as non-wins. Endgame types are not stored on these games, so this recap does not show them.
+      </p>
     </div>
   )
 }
