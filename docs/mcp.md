@@ -39,6 +39,14 @@ Hermes prefixes the tools with their server name. For example,
 PostgreSQL and Neo4j tools may run in parallel. Stockfish calls must remain
 serialized because one persistent UCI process serves that MCP server.
 
+Identity seeds are in `agent/`. Copy them as described in `agent/README.md`.
+Hermes does not read `SOUL.md` or `memories/` from the repository.
+
+The React coach is still a demo. A later connection uses `HERMES_API_URL`
+(default `http://127.0.0.1:8642/v1`) and `HERMES_API_KEY`, which must match
+`API_SERVER_KEY` in `~/.hermes/.env`. Do not put the key in a browser `VITE_`
+variable.
+
 ## PostgreSQL tools
 
 - `list_games`: filter games by type, outcome, opening, and date.

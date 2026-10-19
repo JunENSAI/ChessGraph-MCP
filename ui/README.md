@@ -4,6 +4,11 @@ React interface for the ChessGraph coaching workflow. It currently runs on
 demo data; the data and coach service layers are shaped so the PostgreSQL,
 Neo4j, and Stockfish MCP servers can replace them through Hermes-Agent.
 
+The live coach will call the Hermes gateway at `HERMES_API_URL` with
+`HERMES_API_KEY` from the project `.env`. That call is not implemented. The
+key must stay on a local server and must not be exposed through a `VITE_`
+variable.
+
 ## Run
 
 ```bash
@@ -49,7 +54,7 @@ src/
 ├── views/                Training, My games, Recap
 ├── hooks/                chess clock, coach conversation, element size
 ├── lib/                  clock rules, chess.js helpers, graph builder, stats
-├── services/coach.ts     demo Hermes transport (replace with Hermes-Agent)
+├── services/coach.ts     demo Hermes transport (HERMES_API_URL / HERMES_API_KEY later)
 └── data/                 types and demo content
 ```
 
