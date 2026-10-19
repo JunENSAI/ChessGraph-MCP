@@ -52,7 +52,7 @@ cd ui && npm test
 cd ui && npm run build
 ```
 
-Configuration comes from `.env`, copied from `.env.template`. Do not commit secrets. `HERMES_API_URL` and `HERMES_API_KEY` are placeholders until the UI calls the Hermes gateway. The coach in `ui/src/services/coach.ts` is still a demo and does not call that API. Keep `HERMES_API_KEY` on a local server. Do not expose it as a `VITE_` variable.
+Configuration comes from `.env`, copied from `.env.template`. Do not commit secrets. The coach in `ui/src/services/coach.ts` calls the Hermes gateway through the Vite proxy path `/hermes-api`, which forwards to `HERMES_API_URL` and adds the `HERMES_API_KEY` bearer header server-side. `HERMES_API_KEY` must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on a local server and never expose it as a `VITE_` variable or read it in the browser. Board content still comes from `ui/src/data/demo.ts`.
 
 ## Layout
 

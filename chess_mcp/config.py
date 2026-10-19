@@ -39,17 +39,27 @@ def get_chess_username() -> str:
     return ""
 
 
-def _required(name: str) -> str:
+def _optional(name: str, default: str = "") -> str:
     value = os.getenv(name, "").strip()
+    if value and _UNEXPANDED.fullmatch(value) is None:
+        return value
+    file_value = (dotenv_values(PROJECT_ROOT / ".env").get(name) or "").strip()
+    if file_value and _UNEXPANDED.fullmatch(file_value) is None:
+        return file_value
+    return default
+
+
+def _required(name: str) -> str:
+    value = _optional(name)
     if not value:
         raise ConfigurationError(f"Required environment variable {name} is not set")
     return value
 
 
 def _integer(name: str, default: int, *, minimum: int = 1) -> int:
-    raw = os.getenv(name)
+    raw = _optional(name)
     try:
-        value = default if raw is None else int(raw)
+        value = default if not raw else int(raw)
     except ValueError as exc:
         raise ConfigurationError(f"{name} must be an integer") from exc
     if value < minimum:
@@ -59,7 +69,7 @@ def _integer(name: str, default: int, *, minimum: int = 1) -> int:
 
 @dataclass(frozen=True, slots=True)
 class PostgresSettings:
-    database_url: URL
+    database_url: URL | str
     statement_timeout_ms: int
     max_results: int
 
@@ -88,15 +98,13 @@ class StockfishSettings:
 
 @lru_cache(maxsize=1)
 def get_postgres_settings() -> PostgresSettings:
+    user = _required("POSTGRES_USER")
+    password = _required("POSTGRES_PASSWORD")
+    host = _optional("POSTGRES_HOST", "127.0.0.1")
+    port = _integer("POSTGRES_PORT", 5432)
+    db = _required("POSTGRES_DB")
     return PostgresSettings(
-        database_url=URL.create(
-            "postgresql+psycopg2",
-            username=_required("POSTGRES_USER"),
-            password=_required("POSTGRES_PASSWORD"),
-            host=os.getenv("POSTGRES_HOST", "127.0.0.1"),
-            port=_integer("POSTGRES_PORT", 5432),
-            database=_required("POSTGRES_DB"),
-        ),
+        database_url=f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}",
         statement_timeout_ms=_integer("POSTGRES_STATEMENT_TIMEOUT_MS", 10_000),
         max_results=_integer("MCP_MAX_RESULTS", 100),
     )
@@ -105,10 +113,10 @@ def get_postgres_settings() -> PostgresSettings:
 @lru_cache(maxsize=1)
 def get_neo4j_settings() -> Neo4jSettings:
     return Neo4jSettings(
-        uri=os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687"),
+        uri=_optional("NEO4J_URI", "bolt://127.0.0.1:7687"),
         user=_required("NEO4J_USER"),
         password=_required("NEO4J_PASSWORD"),
-        database=os.getenv("NEO4J_DATABASE", "neo4j"),
+        database=_optional("NEO4J_DATABASE", "neo4j"),
         max_results=_integer("MCP_MAX_RESULTS", 100),
         max_path_depth=min(_integer("NEO4J_MAX_PATH_DEPTH", 4), 8),
     )
@@ -127,7 +135,7 @@ def get_stockfish_settings() -> StockfishSettings:
             "STOCKFISH_DEFAULT_DEPTH cannot exceed STOCKFISH_MAX_DEPTH"
         )
     return StockfishSettings(
-        path=Path(os.getenv("STOCKFISH_PATH", "/usr/games/stockfish")).expanduser(),
+        path=Path(_optional("STOCKFISH_PATH", "/usr/games/stockfish")).expanduser(),
         default_depth=default_depth,
         max_depth=max_depth,
         max_nodes=_integer("STOCKFISH_MAX_NODES", 5_000_000),

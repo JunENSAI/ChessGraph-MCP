@@ -42,10 +42,13 @@ serialized because one persistent UCI process serves that MCP server.
 Identity seeds are in `agent/`. Copy them as described in `agent/README.md`.
 Hermes does not read `SOUL.md` or `memories/` from the repository.
 
-The React coach is still a demo. A later connection uses `HERMES_API_URL`
-(default `http://127.0.0.1:8642/v1`) and `HERMES_API_KEY`, which must match
-`API_SERVER_KEY` in `~/.hermes/.env`. Do not put the key in a browser `VITE_`
-variable.
+The React coach calls Hermes through the Vite proxy at `/hermes-api`, which
+forwards to `HERMES_API_URL` (default `http://127.0.0.1:8642/v1`) and adds the
+`HERMES_API_KEY` bearer header server-side. The key must match
+`API_SERVER_KEY` in `~/.hermes/.env` and must never be exposed as a `VITE_`
+variable or read by the browser. The API server must be enabled
+(`platforms.api_server.enabled: true`) and binds to loopback only. A production
+build needs its own reverse proxy for `/hermes-api`.
 
 ## PostgreSQL tools
 
