@@ -185,6 +185,8 @@ key. Stockfish receives a valid six-field FEN generated from that shared key.
 
 - [`uv`](https://docs.astral.sh/uv/)
 
+- Node.js 22+ and npm, for the React interface
+
 - PostgreSQL with the project schema and loaded data
 
 - Neo4j with the synchronized position graph
@@ -281,6 +283,32 @@ Inspect a server with the official MCP development tooling:
 uv run mcp dev chess_mcp/stockfish/server.py
 ```
 
+### 6. Run the UI
+
+The React interface lives in [`ui/`](ui/) and starts independently of the MCP
+servers. It currently uses demo games and statistics while Hermes-Agent is not
+connected.
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
+Training, My games, and Recap.
+
+Other UI commands:
+
+```bash
+cd ui
+npm test         # clock rules and legal demo lines
+npm run build    # type-check and production bundle
+npm run preview  # serve the production bundle
+```
+
+See [`ui/README.md`](ui/README.md) for the interface structure and libraries.
+
 ## MCP surface
 
 <details>
@@ -345,6 +373,7 @@ ChessGraph-MCP/
 │   ├── postgres_db/           game, theory, and engine-evaluation loaders
 │   ├── neo4j_db/              graph synchronization
 │   └── sql_files/             PostgreSQL schema
+├── ui/                        React coach interface (demo data)
 ├── agent/                     Hermes-Agent MCP configuration example
 ├── docs/                      operations and MCP reference
 ├── tests/                     unit and opt-in integration tests
@@ -369,13 +398,17 @@ It currently provides:
 - local stdio MCP transport;
 - read-only runtime tools;
 - existing-data analysis;
-- deterministic validation and typed evidence.
+- deterministic validation and typed evidence;
+- a local React interface for training, game review, and rating-band recap.
 
-It does not yet provide a production UI, remote HTTP/OAuth deployment, lesson
-persistence, or automatic verification of every natural-language strategic
-claim.
+The interface still uses demo content. It does not yet call Hermes-Agent or the
+MCP servers. Remote HTTP/OAuth deployment, lesson persistence, and automatic
+verification of every natural-language strategic claim are also outside the
+current scope.
 
 ## Documentation
+
+- [Coach interface](ui/README.md)
 
 - [MCP setup, security, and troubleshooting](docs/mcp.md)
 
