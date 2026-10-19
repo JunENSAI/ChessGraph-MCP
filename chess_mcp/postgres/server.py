@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -14,7 +13,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from chess_mcp.config import get_postgres_settings
+from chess_mcp.config import get_chess_username, get_postgres_settings
 from chess_mcp.errors import tool_failure
 
 from .models import (
@@ -55,6 +54,9 @@ are capped at 100 rows (and may be capped lower by server configuration).
 - Player names are `white_username` and `black_username`.
 - `user_color`, `user_elo`, `opponent_elo`, and `user_outcome` describe the
   configured ETL user's perspective when populated.
+- The data owner's Chess.com account is the `CHESS_USERNAME` environment
+  variable. `get_player_summary` uses it when `username` is omitted and
+  returns the resolved account in `username`.
 - `pgn_moves_raw` stores the movetext; `total_plies` counts half-moves.
 
 ## game_moves
@@ -205,9 +207,13 @@ def create_server(repository: PostgresRepository | None = None) -> MCPServer:
         username: str | None = None,
         game_type: GameType | None = None,
     ) -> PlayerSummary:
-        """Summarize a player, defaulting to the ETL CHESS_USERNAME."""
+        """Summarize a player. Omit username to use CHESS_USERNAME from the environment.
 
-        selected_username = username or os.getenv("CHESS_USERNAME", "")
+        The returned username field is the account the server resolved. Do not
+        hardcode that account name.
+        """
+
+        selected_username = username or get_chess_username()
         return _run(
             "get player summary",
             lambda: get_repository().get_player_summary(

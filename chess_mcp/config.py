@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from sqlalchemy import URL
 
 
@@ -17,6 +18,25 @@ load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 class ConfigurationError(ValueError):
     """Raised when required server configuration is missing or invalid."""
+
+
+_UNEXPANDED = re.compile(r"^\$\{[^}]+\}$")
+
+
+def get_chess_username() -> str:
+    """Return the Chess.com account from CHESS_USERNAME, then the local .env.
+
+    An empty value or an unexpanded ``${CHESS_USERNAME}`` placeholder is
+    ignored so a host that forwards the variable without resolving it does
+    not hide the project ``.env`` entry.
+    """
+    value = os.getenv("CHESS_USERNAME", "").strip()
+    if value and _UNEXPANDED.fullmatch(value) is None:
+        return value
+    file_value = (dotenv_values(PROJECT_ROOT / ".env").get("CHESS_USERNAME") or "").strip()
+    if file_value and _UNEXPANDED.fullmatch(file_value) is None:
+        return file_value
+    return ""
 
 
 def _required(name: str) -> str:

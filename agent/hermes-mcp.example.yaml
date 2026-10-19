@@ -1,5 +1,6 @@
 # Merge this mapping into ~/.hermes/config.yaml after running `uv sync`.
 # Keep secrets in environment variables; do not replace ${...} with passwords.
+# CHESS_USERNAME is the Chess.com account from the environment. Do not write it here.
 mcp_servers:
   chess_postgres:
     command: "/home/junior/ChessGraph-MCP/.venv/bin/chessgraph-postgres-mcp"

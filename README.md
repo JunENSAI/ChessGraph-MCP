@@ -265,6 +265,15 @@ mcp_chess_stockfish_compare_move
 PostgreSQL and Neo4j may serve parallel reads. Stockfish parallel calls remain
 disabled because one persistent UCI process is deliberately serialized.
 
+Copy the identity seeds before the first coaching session. Hermes loads
+`SOUL.md` only from `$HERMES_HOME`, and memory only from
+`$HERMES_HOME/memories/`. See [`agent/README.md`](agent/README.md).
+
+The UI does not call Hermes yet. When you connect it, set `HERMES_API_URL`
+and `HERMES_API_KEY` from [`.env.template`](.env.template). `HERMES_API_KEY`
+must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on the server
+side; do not expose it as a `VITE_` variable.
+
 ### 5. Verify
 
 ```bash
@@ -374,7 +383,7 @@ ChessGraph-MCP/
 │   ├── neo4j_db/              graph synchronization
 │   └── sql_files/             PostgreSQL schema
 ├── ui/                        React coach interface (demo data)
-├── agent/                     Hermes-Agent MCP configuration example
+├── agent/                     Hermes persona, memory seeds, MCP config example
 ├── docs/                      operations and MCP reference
 ├── tests/                     unit and opt-in integration tests
 ├── CHESS.md                   chess-domain reference
@@ -401,10 +410,13 @@ It currently provides:
 - deterministic validation and typed evidence;
 - a local React interface for training, game review, and rating-band recap.
 
-The interface still uses demo content. It does not yet call Hermes-Agent or the
-MCP servers. Remote HTTP/OAuth deployment, lesson persistence, and automatic
-verification of every natural-language strategic claim are also outside the
-current scope.
+Committed Hermes seeds live in [`agent/`](agent/) (`SOUL.md`, `MEMORY.md`,
+`USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The gateway
+connection is reserved as `HERMES_API_URL` and `HERMES_API_KEY` in
+[`.env.template`](.env.template). The interface still uses demo content. It
+does not yet call that API or the MCP servers. Remote HTTP/OAuth deployment,
+lesson persistence, and automatic verification of every natural-language
+strategic claim are also outside the current scope.
 
 ## Documentation
 

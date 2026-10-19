@@ -42,8 +42,9 @@ export function createMessage(role: CoachMessage['role'], text: string, demo = f
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
 /**
- * Demo transport. The production version sends the question and board
- * context to Hermes-Agent, which answers using the ChessGraph MCP servers.
+ * Demo transport. A later version posts the question and board context to
+ * HERMES_API_URL with HERMES_API_KEY (see .env.template). Hermes answers
+ * using the ChessGraph MCP servers. Do not read the key from a VITE_ variable.
  */
 export async function askCoach(
   question: string,
