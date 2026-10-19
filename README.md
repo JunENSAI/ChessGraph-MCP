@@ -269,10 +269,12 @@ Copy the identity seeds before the first coaching session. Hermes loads
 `SOUL.md` only from `$HERMES_HOME`, and memory only from
 `$HERMES_HOME/memories/`. See [`agent/README.md`](agent/README.md).
 
-The UI does not call Hermes yet. When you connect it, set `HERMES_API_URL`
-and `HERMES_API_KEY` from [`.env.template`](.env.template). `HERMES_API_KEY`
-must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on the server
-side; do not expose it as a `VITE_` variable.
+The UI coach calls Hermes through a Vite proxy. Set `HERMES_API_URL` and
+`HERMES_API_KEY` from [`.env.template`](.env.template); `HERMES_API_KEY`
+must match `API_SERVER_KEY` in `~/.hermes/.env`. The Vite dev and preview
+servers add the bearer header, so the key stays on the server side; do not
+expose it as a `VITE_` variable. The board content in `ui/src/data/demo.ts` is
+still demo data.
 
 ### 5. Verify
 
@@ -412,11 +414,13 @@ It currently provides:
 
 Committed Hermes seeds live in [`agent/`](agent/) (`SOUL.md`, `MEMORY.md`,
 `USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The gateway
-connection is reserved as `HERMES_API_URL` and `HERMES_API_KEY` in
-[`.env.template`](.env.template). The interface still uses demo content. It
-does not yet call that API or the MCP servers. Remote HTTP/OAuth deployment,
-lesson persistence, and automatic verification of every natural-language
-strategic claim are also outside the current scope.
+connection is configured as `HERMES_API_URL` and `HERMES_API_KEY` in
+[`.env.template`](.env.template). The coach panel calls that API through the
+Vite proxy and answers from the MCP evidence. Game and opening content in
+[`ui/src/data/demo.ts`](ui/src/data/demo.ts) is still demo data and is not yet
+loaded from PostgreSQL. Remote HTTP/OAuth deployment, lesson persistence, and
+automatic verification of every natural-language strategic claim are also
+outside the current scope.
 
 ## Documentation
 

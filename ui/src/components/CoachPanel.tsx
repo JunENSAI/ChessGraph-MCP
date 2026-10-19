@@ -26,7 +26,6 @@ export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, c
   const [draft, setDraft] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const busy = phase !== 'idle'
-  const activeIndex = PHASE_TRACE.indexOf(phase as (typeof PHASE_TRACE)[number])
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
@@ -57,13 +56,8 @@ export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, c
           </span>
         </div>
         <ol className="trace" aria-label="Evidence sources">
-          {PHASE_TRACE.map((step, index) => (
-            <li
-              key={step}
-              className={`trace-step${index === activeIndex ? ' current' : ''}${
-                busy && index < activeIndex ? ' done' : ''
-              }`}
-            >
+          {PHASE_TRACE.map(step => (
+            <li key={step} className={`trace-step${step === phase ? ' current' : ''}`}>
               {SOURCE_LABELS[step]}
             </li>
           ))}

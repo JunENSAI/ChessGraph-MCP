@@ -4,10 +4,16 @@ React interface for the ChessGraph coaching workflow. It currently runs on
 demo data; the data and coach service layers are shaped so the PostgreSQL,
 Neo4j, and Stockfish MCP servers can replace them through Hermes-Agent.
 
-The live coach will call the Hermes gateway at `HERMES_API_URL` with
-`HERMES_API_KEY` from the project `.env`. That call is not implemented. The
-key must stay on a local server and must not be exposed through a `VITE_`
-variable.
+The live coach calls the Hermes gateway. The browser posts to the same-origin
+path `/hermes-api/chat/completions`; the Vite dev and preview servers proxy that
+to `HERMES_API_URL` and add the `HERMES_API_KEY` bearer header themselves, so the
+key never reaches the browser or the bundle. It must never be exposed through a
+`VITE_` variable.
+
+The key must equal `API_SERVER_KEY` in `~/.hermes/.env`, and the gateway must be
+running (`hermes gateway status`) with the API server enabled
+(`platforms.api_server.enabled: true`). `npm run build` emits static files only,
+so a production deployment needs its own reverse proxy for `/hermes-api`.
 
 ## Run
 
@@ -25,6 +31,10 @@ npm run lint
 (Caro-Kann), and endgames (Lucena). A lesson accepts only its line, plays the
 partner's reply, and has Hermes explain each step. Free play moves both sides
 and is the quickest way to try every time control.
+
+Lesson lines and the game library still come from `src/data/demo.ts`. Hermes
+answers questions from the real MCP evidence; the board content around it is
+not yet loaded from PostgreSQL.
 
 **My games** — games grouped in Rapid, Blitz, Bullet, Daily, and Bot folders
 (bot games carry their time control). Each game opens at its key moment with
