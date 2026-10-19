@@ -71,8 +71,15 @@ function buildPrompt(question: string, context: CoachContext): string {
 }
 
 function failureFor(status: number): string {
-  if (status === 401 || status === 403) {
-    return 'Hermes rejected the request. Check that HERMES_API_KEY in the project .env matches API_SERVER_KEY in ~/.hermes/.env, then restart the gateway.'
+  if (status === 401) {
+    return 'Hermes rejected the key. Check that HERMES_API_KEY in the project .env matches API_SERVER_KEY in ~/.hermes/.env, then restart the gateway.'
+  }
+  if (status === 403) {
+    return (
+      'The Hermes gateway refused the request because it carried an Origin header. ' +
+      'It accepts no cross-origin browser callers: the dev proxy must strip Origin and Referer ' +
+      'before forwarding (see ui/vite.config.ts). This is not a key problem.'
+    )
   }
   if (status === 404) {
     return `Hermes has no route at ${COACH_ENDPOINT}. The Vite proxy or the gateway API server is not enabled.`

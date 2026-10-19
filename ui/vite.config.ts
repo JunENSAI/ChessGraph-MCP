@@ -43,6 +43,12 @@ function localProxies(mode: string): Record<string, ProxyOptions> {
           return
         }
         proxy.on('proxyReq', proxyReq => {
+          // The gateway's API server answers 403 to ANY request carrying an
+          // Origin header (it accepts no cross-origin browser callers, and a
+          // preflight gets 403 too). This proxy is the client, not the browser,
+          // so drop the browser provenance headers before forwarding.
+          proxyReq.removeHeader('origin')
+          proxyReq.removeHeader('referer')
           proxyReq.setHeader('authorization', `Bearer ${apiKey}`)
         })
       },

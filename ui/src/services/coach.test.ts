@@ -51,6 +51,15 @@ describe('askCoach', () => {
     expect(seen).toEqual(['composing', 'idle'])
   })
 
+  it('does not blame the key when the gateway refuses a browser Origin', async () => {
+    // The gateway answers 403 to any request carrying an Origin header; the
+    // proxy must strip it. A 403 is not an auth failure.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })))
+
+    await expect(askCoach('plan?', context, () => {})).rejects.toThrow(/Origin header/)
+    await expect(askCoach('plan?', context, () => {})).rejects.not.toThrow(/HERMES_API_KEY/)
+  })
+
   it('reports a rejected key instead of inventing an answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('unauthorized', { status: 401 })))
 
