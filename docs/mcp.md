@@ -50,6 +50,25 @@ variable or read by the browser. The API server must be enabled
 (`platforms.api_server.enabled: true`) and binds to loopback only. A production
 build needs its own reverse proxy for `/hermes-api`.
 
+## Local services
+
+The MCP servers do not start databases or the engine; they connect to what is
+already running. Neo4j is a tarball install under `~/neo4j-community-5.26.31`
+and runs as a systemd user unit (`~/.config/systemd/user/neo4j.service`) with
+lingering enabled, so it starts at boot without a login session:
+
+```bash
+systemctl --user status neo4j     # is it up?
+systemctl --user restart neo4j    # after changing conf or auth
+systemctl --user stop neo4j
+journalctl --user -u neo4j -n 50  # why it failed
+```
+
+Long-lived MCP subprocesses reconnect after a restart, so the gateway does not
+need a reload. If Neo4j is down the coach says the graph evidence is missing;
+PostgreSQL and Stockfish keep answering. PostgreSQL is a system service
+(`systemctl status postgresql`).
+
 ## PostgreSQL tools
 
 - `list_games`: filter games by type, outcome, opening, and date.

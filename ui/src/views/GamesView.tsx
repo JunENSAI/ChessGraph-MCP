@@ -124,7 +124,7 @@ export function GamesView({ active }: { active: boolean }) {
         <header className="panel-head">
           <div>
             <h2 className="panel-title">My games</h2>
-            <p className="panel-subtitle">Grouped by time control</p>
+            <p className="panel-subtitle">Demo library, grouped by time control</p>
           </div>
         </header>
         <div className="scroll-pane">

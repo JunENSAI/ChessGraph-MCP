@@ -41,10 +41,12 @@ not yet loaded from PostgreSQL.
 the played move and the Stockfish alternative drawn as arrows, a navigable
 move list, a 3D position graph, and a Hermes review.
 
-**Recap** — statistics per rating band (1400–1500, 1500–1600, 1600–1700).
-Each card shows its headline figure; selecting a card opens its charts:
-openings with White, defenses with Black, win rate by color, endgame
-patterns, and endgame win rate by color.
+**Recap** — rating bands counted from the PostgreSQL `games` table (under 1700,
+1700–1799, 1800–1899, 1900–1999, and 2000+). The headline on each opening card
+is the stored line with the most games in that band. Cards cover White lines,
+Black lines, win rate by color, and results by time control. Endgame types are
+not stored on the games, so the recap does not invent them. The dev and preview
+servers expose this as `GET /api/recap`.
 
 ## Chess clock
 

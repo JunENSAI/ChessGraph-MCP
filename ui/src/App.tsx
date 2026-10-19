@@ -50,7 +50,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <span className="demo-badge">Board: demo data · Hermes: live</span>
+        <span className="demo-badge">Lessons and library: demo · Recap: your games</span>
       </header>
 
       <main className="workspace">
