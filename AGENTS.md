@@ -46,17 +46,20 @@ uv run python etl/postgres_db/postgres_load.py
 uv run python etl/postgres_db/load_stockfish_eval.py
 uv run python etl/neo4j_db/neo4j_load.py
 
+uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
+
 cd ui && npm install
 cd ui && npm run dev
 cd ui && npm test
 cd ui && npm run build
 ```
 
-Configuration comes from `.env`, copied from `.env.template`. Do not commit secrets. The coach in `ui/src/services/coach.ts` calls the Hermes gateway through the Vite proxy path `/hermes-api`, which forwards to `HERMES_API_URL` and adds the `HERMES_API_KEY` bearer header server-side. `HERMES_API_KEY` must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on a local server and never expose it as a `VITE_` variable or read it in the browser. Board content still comes from `ui/src/data/demo.ts`.
+Configuration comes from `.env`, copied from `.env.template`. Do not commit secrets. The coach in `ui/src/services/coach.ts` calls the Hermes gateway through the Vite proxy path `/hermes-api`, which forwards to `HERMES_API_URL` and adds the `HERMES_API_KEY` bearer header server-side. `HERMES_API_KEY` must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on a local server and never expose it as a `VITE_` variable or read it in the browser. The recap reads PostgreSQL through the retrieval API in `backend/`. Lesson lines and the game library still come from `ui/src/data/demo.ts`.
 
 ## Layout
 
 - `chess_mcp/` — MCP servers, models, and repositories
+- `backend/` — FastAPI reads for the UI, using those repositories
 - `etl/` — writers and the SQL schema
 - `ui/` — React coach, still on demo data
 - `agent/` — Hermes persona, memory seeds, and `hermes-mcp.example.yaml`
