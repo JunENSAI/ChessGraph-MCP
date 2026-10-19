@@ -50,6 +50,13 @@ variable or read by the browser. The API server must be enabled
 (`platforms.api_server.enabled: true`) and binds to loopback only. A production
 build needs its own reverse proxy for `/hermes-api`.
 
+The proxy also strips `Origin` and `Referer`. The gateway API server answers
+`403` to any request that carries an `Origin` header (cross-origin browser
+callers are refused, and the preflight is refused too), while accepting the same
+request without one. Browsers always send `Origin` on a `POST`, so leaving it in
+place makes every coach request fail while `curl` succeeds. A `401` means a key
+mismatch; a `403` means the origin guard.
+
 ## Local services
 
 The MCP servers do not start databases or the engine; they connect to what is
