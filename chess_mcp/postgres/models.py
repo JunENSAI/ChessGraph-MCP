@@ -135,6 +135,26 @@ class EndgamePosition(PostgresModel):
     elo_tier: str | None = None
 
 
+class OpeningLesson(PostgresModel):
+    """One opening the player has used, with a theory line when one is stored."""
+
+    opening_name: str
+    eco_code: str | None = None
+    games: int = Field(ge=0)
+    uci_line: str | None = None
+    pgn_line: str | None = None
+
+
+class EndgameLesson(PostgresModel):
+    """One technique position chosen for the player's rating tier."""
+
+    endgame_type: str
+    fen_full: str
+    human_move_uci: str
+    elo_tier: str | None = None
+    piece_count: int = Field(ge=0)
+
+
 class GamesResult(PostgresModel):
     games: list[GameSummary] = Field(default_factory=list)
 

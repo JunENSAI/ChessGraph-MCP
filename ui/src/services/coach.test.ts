@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askCoach, CoachUnavailableError, type CoachContext, type CoachPhase } from './coach'
+import {
+  askCoach,
+  cachedAnswer,
+  CoachUnavailableError,
+  coachProse,
+  createMessage,
+  loadThread,
+  parsePlayMoves,
+  rememberAnswer,
+  saveThread,
+  type CoachContext,
+  type CoachPhase,
+  type KeyValueStore,
+} from './coach'
 
 const context: CoachContext = {
   mode: 'review',
@@ -16,6 +29,39 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+class MemoryStore implements KeyValueStore {
+  value: string | null = null
+  getItem(): string | null {
+    return this.value
+  }
+  setItem(_key: string, value: string): void {
+    this.value = value
+  }
+}
+
+function memoryStore(): KeyValueStore {
+  return new MemoryStore()
+}
+
+describe('loadThread', () => {
+  it('ignores a stored intro that has no question', () => {
+    const store = memoryStore()
+    saveThread('training', [createMessage('coach', 'Choose an opening.')], store)
+    expect(loadThread('training', store)).toBeNull()
+    saveThread('training', [createMessage('user', 'Why this move?'), createMessage('coach', 'EVAL: +0.2')], store)
+    expect(loadThread('training', store)?.map(message => message.role)).toEqual(['user', 'coach'])
+  })
+})
+
+describe('parsePlayMoves', () => {
+  it('keeps at most six legal UCI moves', () => {
+    const text = 'EVAL: +1.2\nMOVE: e4\nPLAY: e2e4 e7e5 g1f3 b8c6 f1c4 f8c5 d2d3 zz9'
+    expect(parsePlayMoves(text)).toEqual(['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1c4', 'f8c5'])
+    expect(coachProse(text)).not.toContain('PLAY:')
+    expect(coachProse(text)).toContain('MOVE: e4')
+  })
 })
 
 describe('askCoach', () => {
@@ -40,7 +86,44 @@ describe('askCoach', () => {
     expect(body.messages).toHaveLength(1)
     expect(body.messages[0].content).toContain(context.fen)
     expect(body.messages[0].content).toContain('Why was this a mistake?')
-    expect(body.messages[0].content).toContain('chess_stockfish_validate_line')
+    expect(body.messages[0].content).toContain('multipv=1')
+    expect(body.messages[0].content).toContain('limit.value')
+    expect(body.messages[0].content).toContain('PLAY:')
+    expect(body.messages[0].content).not.toContain('validate_line')
+  })
+
+  it('asks for two sentences and no tools when the move is already played', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ choices: [{ message: { content: 'The rook cuts the king off.' } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = memoryStore()
+
+    await askCoach(
+      'Explain Rc4',
+      { ...context, played: { san: 'Rc4', color: 'white', evalText: 'mate in 25 for white' } },
+      () => {},
+      store,
+    )
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))
+    expect(body.messages[0].content).toContain('already played Rc4')
+    expect(body.messages[0].content).toContain('Do not call tools')
+    expect(body.messages[0].content).not.toContain('analyze_position')
+  })
+
+  it('returns a cached answer without calling Hermes', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const store = memoryStore()
+    rememberAnswer(context.mode, context.fen, 'plan?', 'EVAL: +0.4\nMOVE: Nf3\nPLAY: g1f3', store)
+
+    const seen: CoachPhase[] = []
+    const message = await askCoach('plan?', context, phase => seen.push(phase), store)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(seen).toEqual([])
+    expect(message.cached).toBe(true)
+    expect(message.text).not.toContain('PLAY:')
+    expect(message.play).toEqual(['g1f3'])
+    expect(cachedAnswer(context.mode, context.fen, 'plan?', store)).toContain('Nf3')
   })
 
   it('cycles the phase from composing back to idle', async () => {

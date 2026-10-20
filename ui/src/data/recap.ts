@@ -11,6 +11,12 @@ export function mostPlayedLine(items: OpeningStat[]): OpeningStat | undefined {
   })[0]
 }
 
+export function clockGameCounts(band: RecapBand): { label: string; games: number }[] {
+  return band.timeControls
+    .map(item => ({ label: item.label, games: gamesIn(item.results) }))
+    .filter(item => item.games > 0)
+}
+
 export function mostPlayedClock(band: RecapBand) {
   return [...band.timeControls].sort((a, b) => {
     const byGames = gamesIn(b.results) - gamesIn(a.results)

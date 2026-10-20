@@ -77,6 +77,7 @@ export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, c
             >
               {message.role === 'coach' && <div className="message-author">Hermes</div>}
               <p>{message.text}</p>
+              {message.cached && <div className="demo-note">Cached reply</div>}
               {message.demo && <div className="demo-note">Demo reply · connect Hermes-Agent for MCP evidence</div>}
             </motion.article>
           ))}

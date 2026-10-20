@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { busiestBand, chartLabel, loadRecap, mostPlayedLine } from './recap'
+import { busiestBand, chartLabel, clockGameCounts, loadRecap, mostPlayedLine } from './recap'
 import type { OpeningStat, RecapBand } from './types'
 
 const italian: OpeningStat = {
@@ -47,6 +47,17 @@ describe('mostPlayedLine', () => {
 describe('busiestBand', () => {
   it('selects the rating band that contains the most games', () => {
     expect(busiestBand([band('under-1700', 10), band('1900-1999', 40)])?.id).toBe('1900-1999')
+  })
+})
+
+describe('clockGameCounts', () => {
+  it('counts games in each time control that has games', () => {
+    const item = band('1900-1999', 0)
+    item.timeControls = [
+      { id: 'blitz', label: 'Blitz', results: { wins: 4, draws: 1, losses: 2 } },
+      { id: 'bullet', label: 'Bullet', results: { wins: 0, draws: 0, losses: 0 } },
+    ]
+    expect(clockGameCounts(item)).toEqual([{ label: 'Blitz', games: 7 }])
   })
 })
 

@@ -151,11 +151,6 @@ p {
   letter-spacing: -0.01em;
 }
 
-.brand-tagline {
-  color: var(--muted);
-  font-size: 11px;
-}
-
 .mode-switch {
   display: flex;
   gap: 2px;
@@ -193,18 +188,6 @@ p {
   inset: 0;
   border-radius: 8px;
   background: var(--lime);
-}
-
-.demo-badge {
-  padding: 5px 9px;
-  border: 1px solid #4a3c22;
-  border-radius: 999px;
-  background: #20190d;
-  color: var(--amber);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .workspace,
@@ -354,17 +337,56 @@ p {
   padding: 10px 14px 6px;
 }
 
-.board-frame {
-  width: min(100%, calc(100vh - 290px));
-  min-width: 240px;
-  margin: 0 auto;
-  aspect-ratio: 1;
-}
-
+.board-and-eval,
 .player-bar {
   width: min(100%, calc(100vh - 290px));
   min-width: 240px;
   margin: 0 auto;
+}
+
+.board-and-eval {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+}
+
+.board-frame {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  aspect-ratio: 1;
+}
+
+.eval-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.eval-fill {
+  min-height: 0;
+}
+
+.eval-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 0;
+  background: rgba(243, 245, 247, 0.92);
+  color: #11150d;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  text-align: center;
+}
+
+.player-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -685,6 +707,23 @@ p {
   color: var(--lime);
 }
 
+.track-card select {
+  width: 100%;
+  height: 32px;
+  margin: 4px 0;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b0e12;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.track-card {
+  cursor: pointer;
+}
+
 /* Games */
 
 .games-view {
@@ -711,9 +750,21 @@ p {
   grid-area: coach;
 }
 
-.review-board .board-frame,
+.review-board .board-and-eval,
 .review-board .player-bar {
   width: min(100%, calc(100vh - 370px));
+}
+
+.folder-more {
+  width: 100%;
+  margin: 4px 0 8px;
+  padding: 7px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .folder {
@@ -968,9 +1019,20 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.insight-head {
+  cursor: default;
+}
+
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -983,7 +1045,6 @@ p {
 }
 
 .stat-card.expanded {
-  grid-column: 1 / -1;
   border-color: #415b2b;
 }
 
@@ -1048,8 +1109,16 @@ p {
 }
 
 .chart {
-  height: 280px;
+  height: 220px;
   margin-top: 12px;
+}
+
+.chart.short {
+  height: 150px;
+}
+
+.card-grid .chart {
+  height: 180px;
 }
 
 .recap-note {
@@ -1126,11 +1195,16 @@ p {
     height: 520px;
   }
 
-  .board-frame,
+  .board-and-eval,
   .player-bar,
-  .review-board .board-frame,
+  .review-board .board-and-eval,
   .review-board .player-bar {
     width: min(100%, 520px);
+  }
+
+  .card-grid,
+  .insight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .summary-strip {
@@ -1147,7 +1221,6 @@ p {
     flex-wrap: wrap;
   }
 
-  .brand-tagline,
   .trace {
     display: none;
   }
