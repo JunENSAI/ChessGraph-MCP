@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from backend.main import create_app
+from chess_mcp.postgres.models import EndgameLesson, OpeningLesson, PlayerSummary
 from chess_mcp.postgres.recap import build_recap
 
 
@@ -55,6 +56,87 @@ def test_opening_lookup_uses_the_repository() -> None:
     response = client.get("/api/openings", params={"fen": "8/8/8/8/8/8/8/K7 w - - 0 1"})
     assert response.status_code == 200
     assert response.json()["openings"] == []
+
+
+class LessonPostgres(FakePostgres):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def list_games(self, **arguments: object):
+        self.calls.append(("list_games", arguments))
+        return []
+
+    def list_opening_lessons(self, **arguments: object):
+        self.calls.append(("openings", arguments))
+        return [
+            OpeningLesson(
+                opening_name="Italian Game",
+                eco_code="C50",
+                games=12,
+                uci_line="e2e4 e7e5",
+                pgn_line="1. e4 e5",
+            )
+        ]
+
+    def get_player_summary(self, username: str, game_type: str | None = None):
+        return PlayerSummary(
+            username=username,
+            games_played=12,
+            wins=6,
+            losses=4,
+            draws=2,
+            unfinished=0,
+            average_rating=1760,
+        )
+
+    def list_endgame_lessons(self, **arguments: object):
+        self.calls.append(("endgames", arguments))
+        return (
+            "1600-1800",
+            [
+                EndgameLesson(
+                    endgame_type="rook_pawn",
+                    fen_full="8/8/8/8/8/2k5/8/K6R w - - 0 1",
+                    human_move_uci="h1h2",
+                    elo_tier="1600-1800",
+                    piece_count=3,
+                )
+            ],
+        )
+
+
+def test_opening_lessons_use_the_requested_color() -> None:
+    client = TestClient(create_app(postgres=LessonPostgres()))
+    response = client.get("/api/lessons/openings", params={"color": "black", "player": "junior"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lessons"][0]["opening_name"] == "Italian Game"
+    assert body["lessons"][0]["uci_line"] == "e2e4 e7e5"
+
+
+def test_endgame_lessons_use_the_player_rating() -> None:
+    postgres = LessonPostgres()
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/lessons/endgames", params={"player": "junior"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["elo_tier"] == "1600-1800"
+    assert body["lessons"][0]["human_move_uci"] == "h1h2"
+    assert postgres.calls[0][1]["average_rating"] == 1760
+
+
+def test_games_default_to_the_configured_player(monkeypatch) -> None:
+    postgres = LessonPostgres()
+    monkeypatch.setattr("backend.main.get_chess_username", lambda: "junior")
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/games", params={"game_type": "rapid", "limit": 25, "offset": 25})
+    assert response.status_code == 200
+    assert response.json() == {"games": []}
+    arguments = postgres.calls[0][1]
+    assert arguments["player"] == "junior"
+    assert arguments["offset"] == 25
+    assert arguments["limit"] == 25
+    assert arguments["game_type"] == "rapid"
 
 
 def test_missing_graph_position_is_not_found() -> None:

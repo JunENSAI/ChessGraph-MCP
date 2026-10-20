@@ -25,6 +25,9 @@ export interface KeyMoment {
   evalBefore: number
   evalAfter: number
   explanation: string
+  cpLoss?: number
+  /** When false, the stored engine move is missing and the graph stays on the played path. */
+  showEngine?: boolean
 }
 
 export interface LibraryGame {
@@ -76,6 +79,9 @@ export interface TimeControlStat {
   id: GameCategory
   label: string
   results: OutcomeCounts
+  averageOpponentElo?: number | null
+  averageEloWhenWin?: number | null
+  averageEloWhenLoss?: number | null
 }
 
 /** Recap band counted from stored games. Endgame types are not on those rows. */

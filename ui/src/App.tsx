@@ -30,10 +30,7 @@ export default function App() {
           <span className="brand-mark" aria-hidden="true">
             ♞
           </span>
-          <div>
-            <h1 className="brand-name">ChessGraph Coach</h1>
-            <p className="brand-tagline">Stockfish evidence · personal games · Hermes explanations</p>
-          </div>
+          <h1 className="brand-name">ChessGraph Coach</h1>
         </div>
         <nav className="mode-switch" aria-label="Coach mode">
           {MODES.map(({ id, label, icon: Icon }) => (
@@ -50,7 +47,6 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <span className="demo-badge">Lessons and library: demo · Recap: your games</span>
       </header>
 
       <main className="workspace">

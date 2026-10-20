@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts'
 import { StatCard } from '../components/StatCard'
-import { busiestBand, chartLabel, loadRecap, mostPlayedClock, mostPlayedLine } from '../data/recap'
+import { busiestBand, chartLabel, clockGameCounts, loadRecap, mostPlayedClock, mostPlayedLine } from '../data/recap'
 import type { OpeningStat, RecapBand, RecapPayload, TimeControlStat } from '../data/types'
 import { share, totalGames, winRate } from '../lib/stats'
 
@@ -46,7 +46,7 @@ function RepertoireChart({ items }: { items: OpeningStat[] }) {
           <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
             <CartesianGrid stroke={GRID} horizontal={false} />
             <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
-            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={210} />
+            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={88} />
             <Tooltip {...TOOLTIP} />
             <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar dataKey="Wins" stackId="r" fill={COLORS.win} radius={[4, 0, 0, 4]} />
@@ -161,6 +161,68 @@ function TimeControlChart({ items }: { items: TimeControlStat[] }) {
   )
 }
 
+function BandClockChart({ band }: { band: RecapBand }) {
+  const rows = clockGameCounts(band)
+  if (rows.length === 0) return <p className="muted small">No games in this band.</p>
+  return (
+    <div className="chart short">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={rows} margin={{ left: 0, right: 8, top: 8 }}>
+          <CartesianGrid stroke={GRID} vertical={false} />
+          <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} />
+          <YAxis tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} width={36} />
+          <Tooltip {...TOOLTIP} />
+          <Bar dataKey="games" name="Games" fill={COLORS.win} radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function ClockProfileChart({ clock }: { clock: TimeControlStat | undefined }) {
+  if (!clock) return <p className="muted small">No time control in this band.</p>
+  const results = [
+    { name: 'Wins', value: clock.results.wins },
+    { name: 'Draws', value: clock.results.draws },
+    { name: 'Losses', value: clock.results.losses },
+  ]
+  const elos = [
+    { name: 'Opponent', value: clock.averageOpponentElo },
+    { name: 'When you win', value: clock.averageEloWhenWin },
+    { name: 'When you lose', value: clock.averageEloWhenLoss },
+  ].filter(item => item.value != null)
+  return (
+    <>
+      <div className="chart short">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={results} margin={{ left: 0, right: 8, top: 8 }}>
+            <CartesianGrid stroke={GRID} vertical={false} />
+            <XAxis dataKey="name" tick={AXIS} axisLine={false} tickLine={false} />
+            <YAxis tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} width={36} />
+            <Tooltip {...TOOLTIP} />
+            <Bar dataKey="value" name="Games" fill="#77a7ff" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      {elos.length > 0 ? (
+        <div className="chart short">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={elos} margin={{ left: 0, right: 8, top: 8 }}>
+              <CartesianGrid stroke={GRID} vertical={false} />
+              <XAxis dataKey="name" tick={AXIS} axisLine={false} tickLine={false} />
+              <YAxis tick={AXIS} axisLine={false} tickLine={false} width={40} />
+              <Tooltip {...TOOLTIP} />
+              <Bar dataKey="value" name="Elo" fill={COLORS.draw} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <p className="muted small">Elo is not stored for this time control.</p>
+      )}
+    </>
+  )
+}
+
 function lineCaption(line: OpeningStat | undefined, sideTotal: number): string {
   if (!line || sideTotal === 0) return 'No games in this band'
   return `${share(totalGames(line.results), sideTotal)}% of games with these pieces · ${winRate(line.results)}% wins`
@@ -213,7 +275,9 @@ export function RecapView() {
 function RecapBands({ payload }: { payload: RecapPayload }) {
   const initial = busiestBand(payload.bands)
   const [bandId, setBandId] = useState(initial?.id ?? '')
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(['openings', 'defenses', 'colors', 'clocks']),
+  )
   const band = payload.bands.find(item => item.id === bandId) ?? initial
 
   if (!band) {
@@ -225,7 +289,13 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
     )
   }
 
-  const toggle = (id: string) => setExpanded(current => (current === id ? null : id))
+  const toggle = (id: string) =>
+    setExpanded(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   const whiteTotal = totalGames(band.white)
   const blackTotal = totalGames(band.black)
   const topOpening = mostPlayedLine(band.openingsWhite)
@@ -237,10 +307,6 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
       <header className="recap-head">
         <div>
           <h2 className="recap-title">Rating-band recap</h2>
-          <p className="panel-subtitle">
-            {payload.gameCount.toLocaleString()} stored games. The headline is the line with the most games in the
-            band, so a line you have played can still rank behind a larger one.
-          </p>
         </div>
         <div className="band-switch" role="tablist" aria-label="Rating band">
           {payload.bands.map(item => (
@@ -250,10 +316,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
               role="tab"
               aria-selected={item.id === band.id}
               className={item.id === band.id ? 'active' : ''}
-              onClick={() => {
-                setBandId(item.id)
-                setExpanded(null)
-              }}
+              onClick={() => setBandId(item.id)}
             >
               {item.id === band.id && <motion.span layoutId="band-indicator" className="band-indicator" />}
               <span>{item.label}</span>
@@ -281,6 +344,33 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
         </div>
       </div>
 
+      <div className="insight-grid">
+        <article className="stat-card expanded">
+          <div className="stat-summary insight-head">
+            <span className="stat-text">
+              <span className="eyebrow">Games in band</span>
+              <strong>{whiteTotal + blackTotal}</strong>
+              <span className="muted">Games in each time control</span>
+            </span>
+          </div>
+          <div className="stat-details">
+            <BandClockChart band={band} />
+          </div>
+        </article>
+        <article className="stat-card expanded">
+          <div className="stat-summary insight-head">
+            <span className="stat-text">
+              <span className="eyebrow">Most played clock</span>
+              <strong>{topClock ? topClock.label : '—'}</strong>
+              <span className="muted">Results and average Elo</span>
+            </span>
+          </div>
+          <div className="stat-details">
+            <ClockProfileChart clock={topClock} />
+          </div>
+        </article>
+      </div>
+
       <motion.div layout className="card-grid" key={band.id}>
         <StatCard
           id="openings"
@@ -288,7 +378,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Most played lines · White"
           headline={topOpening?.name ?? 'No games'}
           caption={lineCaption(topOpening, whiteTotal)}
-          expanded={expanded === 'openings'}
+          expanded={expanded.has('openings')}
           onToggle={toggle}
         >
           <RepertoireChart items={band.openingsWhite} />
@@ -299,7 +389,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Most played lines · Black"
           headline={topDefense?.name ?? 'No games'}
           caption={lineCaption(topDefense, blackTotal)}
-          expanded={expanded === 'defenses'}
+          expanded={expanded.has('defenses')}
           onToggle={toggle}
         >
           <RepertoireChart items={band.defensesBlack} />
@@ -310,7 +400,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Win percentage by color"
           headline={`${winRate(band.white)}% · ${winRate(band.black)}%`}
           caption="White pieces · Black pieces"
-          expanded={expanded === 'colors'}
+          expanded={expanded.has('colors')}
           onToggle={toggle}
         >
           <ColorResultsChart band={band} />
@@ -321,7 +411,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Results by time control"
           headline={topClock ? `${topClock.label} · ${totalGames(topClock.results)}` : 'No games'}
           caption={topClock ? `${winRate(topClock.results)}% wins in that time control` : 'No stored games'}
-          expanded={expanded === 'clocks'}
+          expanded={expanded.has('clocks')}
           onToggle={toggle}
         >
           <TimeControlChart items={band.timeControls} />

@@ -39,8 +39,8 @@ mcp_servers:
     args: []
     env:
       STOCKFISH_PATH: "${STOCKFISH_PATH}"
-      STOCKFISH_DEFAULT_DEPTH: "15"
-      STOCKFISH_MAX_DEPTH: "30"
+      # Depth bounds are read from the repo .env when these keys are unset.
+      # Setting them here overrides STOCKFISH_DEFAULT_DEPTH and STOCKFISH_MAX_DEPTH.
       STOCKFISH_MAX_NODES: "5000000"
       STOCKFISH_MAX_TIME_MS: "30000"
       STOCKFISH_MAX_MULTIPV: "5"

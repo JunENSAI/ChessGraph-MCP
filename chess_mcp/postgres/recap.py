@@ -56,6 +56,9 @@ class TimeControlStat(RecapModel):
     id: str
     label: str
     results: OutcomeCounts
+    average_opponent_elo: int | None = Field(default=None, alias="averageOpponentElo")
+    average_elo_when_win: int | None = Field(default=None, alias="averageEloWhenWin")
+    average_elo_when_loss: int | None = Field(default=None, alias="averageEloWhenLoss")
 
 
 class RecapBand(RecapModel):
@@ -83,17 +86,28 @@ def _add(counts: dict[str, int], outcome: str, amount: int) -> None:
         counts[key] += amount
 
 
-def build_recap(rows: list[tuple], time_rows: list[tuple]) -> RecapPayload:
-    """Fold aggregated game rows into the rating-band payload the UI renders."""
+def build_recap(
+    rows: list[tuple],
+    time_rows: list[tuple],
+    clock_elo_rows: list[tuple] | None = None,
+) -> RecapPayload:
+    """Fold aggregated game rows into the rating-band payload the UI renders.
+
+    ``clock_elo_rows`` are ``(band, game_type, average_opponent, average_when_win,
+    average_when_loss)``. Missing rows leave those averages empty.
+    """
     totals: dict[tuple[str, str], dict[str, int]] = {}
     lines: dict[tuple[str, str, str, str], dict[str, int]] = {}
     clocks: dict[tuple[str, str], dict[str, int]] = {}
+    elo: dict[tuple[str, str], tuple[int | None, int | None, int | None]] = {}
 
     for band, color, name, eco, outcome, amount in rows:
         _add(totals.setdefault((band, color), _empty()), outcome, amount)
         _add(lines.setdefault((band, color, name, eco), _empty()), outcome, amount)
     for band, game_type, outcome, amount in time_rows:
         _add(clocks.setdefault((band, game_type), _empty()), outcome, amount)
+    for band, game_type, average_opponent, average_win, average_loss in clock_elo_rows or []:
+        elo[(band, game_type)] = (average_opponent, average_win, average_loss)
 
     def top_lines(band: str, color: str) -> list[OpeningLineStat]:
         matching = [
@@ -119,6 +133,9 @@ def build_recap(rows: list[tuple], time_rows: list[tuple]) -> RecapPayload:
                 id=game_type,
                 label=TIME_LABELS.get(game_type, game_type),
                 results=OutcomeCounts.model_validate(counts),
+                average_opponent_elo=elo.get((band, game_type), (None, None, None))[0],
+                average_elo_when_win=elo.get((band, game_type), (None, None, None))[1],
+                average_elo_when_loss=elo.get((band, game_type), (None, None, None))[2],
             )
             for game_type, counts in matching
         ]

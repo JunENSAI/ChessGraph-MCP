@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import date
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from neo4j.exceptions import Neo4jError
@@ -76,6 +77,12 @@ def create_app(
     def postgres_repo(request: Request) -> PostgresRepository:
         return request.app.state.postgres
 
+    def configured_player(player: str | None) -> str:
+        selected = (player if player is not None else get_chess_username()).strip()
+        if not selected:
+            raise HTTPException(status_code=400, detail="CHESS_USERNAME is not set")
+        return selected
+
     def neo4j_repo(request: Request) -> Neo4jRepository:
         if request.app.state.neo4j is None:
             request.app.state.neo4j = Neo4jRepository.from_settings(get_neo4j_settings())
@@ -105,17 +112,19 @@ def create_app(
         played_from: date | None = None,
         played_to: date | None = None,
         limit: int = Query(default=20, ge=1),
+        offset: int = Query(default=0, ge=0),
         repo: PostgresRepository = Depends(postgres_repo),
     ):
         return {
             "games": repo.list_games(
-                player=player,
+                player=configured_player(player),
                 game_type=game_type,
                 user_outcome=user_outcome,
                 eco_code=eco_code,
                 played_from=played_from,
                 played_to=played_to,
                 limit=limit,
+                offset=offset,
             )
         }
 
@@ -138,6 +147,35 @@ def create_app(
             "start_ply": start_ply,
             "moves": repo.get_game_moves(game_id, start_ply=start_ply, limit=limit),
         }
+
+    @app.get("/api/lessons/openings")
+    def lesson_openings(
+        color: Literal["white", "black"],
+        player: str | None = None,
+        limit: int = Query(default=5, ge=1, le=5),
+        repo: PostgresRepository = Depends(postgres_repo),
+    ):
+        return {
+            "lessons": repo.list_opening_lessons(
+                player=configured_player(player),
+                color=color,
+                limit=limit,
+            )
+        }
+
+    @app.get("/api/lessons/endgames")
+    def lesson_endgames(
+        player: str | None = None,
+        limit: int = Query(default=5, ge=1, le=5),
+        repo: PostgresRepository = Depends(postgres_repo),
+    ):
+        selected = configured_player(player)
+        summary = repo.get_player_summary(selected)
+        tier, lessons = repo.list_endgame_lessons(
+            average_rating=summary.average_rating,
+            limit=limit,
+        )
+        return {"elo_tier": tier, "lessons": lessons}
 
     @app.get("/api/player")
     def player(

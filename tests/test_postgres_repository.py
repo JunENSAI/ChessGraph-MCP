@@ -83,6 +83,8 @@ def test_list_games_is_parameterized_readonly_and_capped() -> None:
     assert ":player" in query_sql
     assert query_params["player"] == hostile_player
     assert query_params["limit"] == 100
+    assert query_params["offset"] == 0
+    assert "OFFSET :offset" in query_sql
     assert "INSERT " not in query_sql.upper()
     assert "UPDATE " not in query_sql.upper()
     assert "DELETE " not in query_sql.upper()
@@ -170,6 +172,59 @@ def test_default_blunder_query_is_limited_to_data_owner_moves() -> None:
     assert "g.user_color = 'white' AND m.turn_color = 'w'" in query_sql
     assert "g.user_color = 'black' AND m.turn_color = 'b'" in query_sql
     assert query_params["player"] is None
+
+
+def test_list_games_binds_offset_and_rejects_a_negative_page() -> None:
+    engine = FakeEngine([])
+    repository = PostgresRepository(
+        engine,  # type: ignore[arg-type]
+        statement_timeout_ms=1000,
+        max_results=20,
+    )
+
+    assert repository.list_games(player="junior", limit=25, offset=25) == []
+    _query_sql, query_params = engine.connection.executions[1]
+    assert query_params["offset"] == 25
+    assert query_params["limit"] == 20
+
+    try:
+        repository.list_games(offset=-1)
+    except ValueError as exc:
+        assert "offset" in str(exc)
+    else:
+        raise AssertionError("negative offset should be rejected")
+
+
+def test_opening_lessons_bind_the_player_and_color() -> None:
+    engine = FakeEngine([])
+    repository = PostgresRepository(
+        engine,  # type: ignore[arg-type]
+        statement_timeout_ms=1000,
+        max_results=20,
+    )
+
+    assert repository.list_opening_lessons(player="junior", color="white", limit=5) == []
+    query_sql, query_params = engine.connection.executions[1]
+    assert "junior" not in query_sql
+    assert query_params == {"player": "junior", "color": "white", "limit": 5}
+    assert "opening_theory" in query_sql
+
+
+def test_endgame_lessons_bind_the_rating() -> None:
+    engine = FakeEngine([])
+    repository = PostgresRepository(
+        engine,  # type: ignore[arg-type]
+        statement_timeout_ms=1000,
+        max_results=20,
+    )
+
+    tier, lessons = repository.list_endgame_lessons(average_rating=1750.4, limit=5)
+    assert tier is None
+    assert lessons == []
+    query_sql, query_params = engine.connection.executions[1]
+    assert query_params == {"rating": 1750.4, "limit": 5}
+    assert "endgame_theory" in query_sql
+    assert "1750.4" not in query_sql
 
 
 def test_close_disposes_engine() -> None:

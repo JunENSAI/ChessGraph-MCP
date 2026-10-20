@@ -14,11 +14,13 @@ from chess_mcp.config import PostgresSettings
 
 from .models import (
     Blunder,
+    EndgameLesson,
     EndgamePosition,
     GameDetail,
     GameMove,
     GameSummary,
     GameType,
+    OpeningLesson,
     OpeningTheory,
     PlayerSummary,
     PositionOccurrence,
@@ -112,7 +114,10 @@ class PostgresRepository:
         played_from: date | None = None,
         played_to: date | None = None,
         limit: int = 20,
+        offset: int = 0,
     ) -> list[GameSummary]:
+        if offset < 0:
+            raise ValueError("offset must not be negative")
         rows = self._fetch_all(
             text(
                 f"""
@@ -133,6 +138,7 @@ class PostgresRepository:
                 AND (:played_to IS NULL OR g.played_date <= :played_to)
                 ORDER BY g.played_date DESC, g.game_id DESC
                 LIMIT :limit
+                OFFSET :offset
                 """
             ),
             {
@@ -143,6 +149,7 @@ class PostgresRepository:
                 "played_from": played_from,
                 "played_to": played_to,
                 "limit": self._limit(limit),
+                "offset": offset,
             },
         )
         return [GameSummary.model_validate(row) for row in rows]
@@ -464,6 +471,130 @@ class PostgresRepository:
         )
         return normalized_fen, [EndgamePosition.model_validate(row) for row in rows]
 
+    def list_opening_lessons(
+        self,
+        *,
+        player: str,
+        color: str,
+        limit: int = 5,
+    ) -> list[OpeningLesson]:
+        """Top opening names for one color, with one stored theory line when it exists."""
+        if color not in ("white", "black"):
+            raise ValueError("color must be white or black")
+        rows = self._fetch_all(
+            text(
+                """
+                WITH played AS (
+                    SELECT
+                        btrim(opening_name) AS opening_name,
+                        count(*) AS games,
+                        mode() WITHIN GROUP (ORDER BY eco_code) AS eco_code
+                    FROM games
+                    WHERE user_color = :color
+                      AND (
+                          lower(white_username) = lower(:player)
+                          OR lower(black_username) = lower(:player)
+                      )
+                      AND opening_name IS NOT NULL
+                      AND btrim(opening_name) <> ''
+                    GROUP BY btrim(opening_name)
+                    ORDER BY count(*) DESC, btrim(opening_name)
+                    LIMIT :limit
+                )
+                SELECT
+                    p.opening_name,
+                    p.games,
+                    p.eco_code,
+                    theory.uci_line,
+                    theory.pgn_line
+                FROM played AS p
+                LEFT JOIN LATERAL (
+                    SELECT o.uci_line, o.pgn_line
+                    FROM opening_theory AS o
+                    WHERE o.opening_name = p.opening_name
+                    ORDER BY
+                        CASE
+                            WHEN p.eco_code IS NOT NULL AND o.eco_code = p.eco_code THEN 0
+                            ELSE 1
+                        END,
+                        o.opening_id
+                    LIMIT 1
+                ) AS theory ON true
+                ORDER BY p.games DESC, p.opening_name
+                """
+            ),
+            {"player": player, "color": color, "limit": self._limit(limit)},
+        )
+        return [OpeningLesson.model_validate(row) for row in rows]
+
+    def list_endgame_lessons(
+        self,
+        *,
+        average_rating: float | None,
+        limit: int = 5,
+    ) -> tuple[str | None, list[EndgameLesson]]:
+        """Technique positions from the elo tier nearest ``average_rating``.
+
+        With no rating, the tier that holds the most positions is used.
+        Each type contributes one position, the one with the fewest pieces.
+        """
+        rows = self._fetch_all(
+            text(
+                """
+                WITH tier_stats AS (
+                    SELECT
+                        elo_tier,
+                        count(*) AS positions,
+                        avg(player_elo) AS average_elo
+                    FROM endgame_theory
+                    WHERE elo_tier IS NOT NULL AND btrim(elo_tier) <> ''
+                    GROUP BY elo_tier
+                ),
+                chosen AS (
+                    SELECT elo_tier
+                    FROM tier_stats
+                    ORDER BY
+                        CASE
+                            WHEN CAST(:rating AS double precision) IS NULL THEN -positions
+                            ELSE abs(average_elo - CAST(:rating AS double precision))
+                        END,
+                        positions DESC,
+                        elo_tier
+                    LIMIT 1
+                ),
+                ranked_types AS (
+                    SELECT e.endgame_type, count(*) AS positions
+                    FROM endgame_theory AS e
+                    JOIN chosen AS c ON e.elo_tier = c.elo_tier
+                    GROUP BY e.endgame_type
+                    ORDER BY count(*) DESC, e.endgame_type
+                    LIMIT :limit
+                )
+                SELECT DISTINCT ON (e.endgame_type)
+                    e.endgame_type,
+                    e.fen_full,
+                    e.human_move_uci,
+                    e.elo_tier,
+                    e.piece_count,
+                    r.positions
+                FROM endgame_theory AS e
+                JOIN chosen AS c ON e.elo_tier = c.elo_tier
+                JOIN ranked_types AS r ON r.endgame_type = e.endgame_type
+                ORDER BY e.endgame_type, e.piece_count, e.endgame_id
+                """
+            ),
+            {"rating": average_rating, "limit": self._limit(limit)},
+        )
+        rows.sort(key=lambda row: (-int(row["positions"]), row["endgame_type"]))
+        lessons = [
+            EndgameLesson.model_validate(
+                {key: value for key, value in row.items() if key != "positions"}
+            )
+            for row in rows
+        ]
+        tier = lessons[0].elo_tier if lessons else None
+        return tier, lessons
+
     def get_rating_recap(self) -> RecapPayload:
         """Count stored games by rating band, color, opening line, and clock."""
         opening_rows = [
@@ -513,4 +644,36 @@ class PostgresRepository:
                 {},
             )
         ]
-        return build_recap(opening_rows, time_rows)
+        clock_rows = [
+            (
+                row["band"],
+                row["game_type"],
+                _round_elo(row["average_opponent_elo"]),
+                _round_elo(row["average_elo_when_win"]),
+                _round_elo(row["average_elo_when_loss"]),
+            )
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT
+                        {BAND_SQL} AS band,
+                        game_type::text AS game_type,
+                        avg(opponent_elo) AS average_opponent_elo,
+                        avg(user_elo) FILTER (WHERE user_outcome = 'win') AS average_elo_when_win,
+                        avg(user_elo) FILTER (WHERE user_outcome = 'loss') AS average_elo_when_loss
+                    FROM games
+                    WHERE user_color IN ('white', 'black')
+                      AND user_outcome IN ('win', 'loss', 'draw')
+                    GROUP BY 1, 2
+                    """
+                ),
+                {},
+            )
+        ]
+        return build_recap(opening_rows, time_rows, clock_rows)
+
+
+def _round_elo(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(round(float(value)))
