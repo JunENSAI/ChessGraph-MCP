@@ -111,8 +111,8 @@ def create_app(
         eco_code: str | None = None,
         played_from: date | None = None,
         played_to: date | None = None,
-        limit: int = Query(default=20, ge=1),
-        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0, le=100_000),
         repo: PostgresRepository = Depends(postgres_repo),
     ):
         return {
@@ -139,7 +139,7 @@ def create_app(
     def game_moves(
         game_id: int,
         start_ply: int = Query(default=1, ge=1),
-        limit: int = Query(default=100, ge=1),
+        limit: int = Query(default=100, ge=1, le=100),
         repo: PostgresRepository = Depends(postgres_repo),
     ):
         return {

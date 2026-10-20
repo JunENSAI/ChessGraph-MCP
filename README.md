@@ -2,7 +2,7 @@
 
 # ChessGraph MCP
 
-### A local layer for personalized chess coaching
+### A local evidence layer for personalized chess coaching
 
 Connect an MCP-capable agent to personal game history, a positional knowledge
 graph, and reproducible Stockfish analysis—without giving the model unrestricted
@@ -101,8 +101,8 @@ flowchart LR
 The ETL layer writes data. The MCP servers and the retrieval API only read.
 They call the same repositories in `chess_mcp/`. MCP tools stay typed and
 bounded for Hermes. The API serves the facts the interface can draw before a
-question is asked, such as the rating-band recap. Hermes explains; it does not
-assemble the page.
+question is asked: the rating-band recap, training lessons, and the game
+library. Hermes explains; it does not assemble the page.
 
 ## What the agent can ask
 
@@ -331,17 +331,30 @@ npm run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
-Training, My games, and Recap. Recap counts stored games through
-`GET /api/recap`. The favorite line in a rating band is the stored opening
-name with the most games, so a line that was played can still rank behind a
-larger one. Training lessons and the game library in
-[`ui/src/data/demo.ts`](ui/src/data/demo.ts) are still sample content.
+Training, My games, and Recap. Each one reads PostgreSQL through the retrieval
+API:
+
+- Recap uses `GET /api/recap`. The favorite line in a rating band is the stored
+  opening name with the most games, so a line that was played can still rank
+  behind a larger one.
+- Training uses `GET /api/lessons/openings` and `GET /api/lessons/endgames`.
+  Openings and defenses are the account's most-played lines, each with one
+  stored theory line. Endgames are technique positions from the elo tier
+  nearest the account's average rating.
+- My games uses `GET /api/player`, `GET /api/games`, and
+  `GET /api/games/{id}/moves`. The review opens on the move with the largest
+  stored centipawn loss.
+
+If the API or PostgreSQL is unavailable, the mode shows that error and a
+retry. An empty database says that nothing is stored. Sample lines in
+[`ui/src/data/demo.ts`](ui/src/data/demo.ts) are synthetic fixtures for unit
+tests and are not shown in the interface.
 
 Other UI commands:
 
 ```bash
 cd ui
-npm test         # clock rules and legal demo lines
+npm test         # clock rules, lesson lines, and the game-library mapping
 npm run build    # type-check and production bundle
 npm run preview  # serve the production bundle
 ```
@@ -413,7 +426,7 @@ ChessGraph-MCP/
 │   ├── neo4j_db/              graph synchronization
 │   └── sql_files/             PostgreSQL schema
 ├── backend/                   FastAPI reads for the UI
-├── ui/                        React coach; recap from the API, lessons still demo
+├── ui/                        React coach; lessons, games, and recap from the API
 ├── agent/                     Hermes persona, memory seeds, MCP config example
 ├── docs/                      operations and MCP reference
 ├── tests/                     unit and opt-in integration tests
@@ -445,10 +458,9 @@ It currently provides:
 Committed Hermes seeds live in [`agent/`](agent/) (`SOUL.md`, `MEMORY.md`,
 `USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The coach
 panel calls Hermes through the Vite proxy and answers from the MCP evidence.
-The recap is counted from PostgreSQL. Lesson lines and the game library are
-still demo content. Remote HTTP/OAuth deployment, lesson persistence, and
-automatic verification of every natural-language strategic claim are also
-outside the current scope.
+The recap, training lessons, and game library are read from PostgreSQL.
+Remote HTTP/OAuth deployment, lesson persistence, and automatic verification
+of every natural-language strategic claim are outside the current scope.
 
 ## Documentation
 

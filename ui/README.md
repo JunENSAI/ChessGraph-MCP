@@ -1,8 +1,10 @@
 # ChessGraph Coach UI
 
-React interface for the ChessGraph coaching workflow. It currently runs on
-demo data; the data and coach service layers are shaped so the PostgreSQL,
-Neo4j, and Stockfish MCP servers can replace them through Hermes-Agent.
+React interface for the ChessGraph coaching workflow. Training lessons, the
+game library, and the rating-band recap load from the FastAPI retrieval API.
+The browser calls the same-origin path `/api`; the Vite dev and preview
+servers proxy that to `BACKEND_URL` (default `http://127.0.0.1:8000`). Hermes
+explains the position. It does not supply the lessons or the game list.
 
 The live coach calls the Hermes gateway. The browser posts to the same-origin
 path `/hermes-api/chat/completions`; the Vite dev and preview servers proxy that
@@ -20,26 +22,32 @@ so a production deployment needs its own reverse proxy for `/hermes-api`.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # clock logic and demo-data legality
+npm test         # clock logic, lesson lines, and the game-library mapping
 npm run build    # type-check and production bundle
 npm run lint
 ```
 
 ## Modes
 
-**Training** — move-by-move lessons for openings (Italian Game), defenses
-(Caro-Kann), and endgames (Lucena). A lesson accepts only its line, plays the
+**Training** — lessons from the stored games. Openings and defenses come from
+`GET /api/lessons/openings`: the lines the account has played most, each with
+one theory line from `opening_theory` when that name is stored. Endgames come
+from `GET /api/lessons/endgames`: technique positions in the elo tier nearest
+the account's average rating. A lesson accepts only its line, plays the
 partner's reply, and has Hermes explain each step. Free play moves both sides
-and is the quickest way to try every time control.
+against Stockfish and does not need a stored lesson. While the catalog loads,
+the selectors say so. An empty database says that no lessons are stored. If
+the API is down, the panel shows the error and a retry. Sample lines are not
+substituted.
 
-Lesson lines and the game library still come from `src/data/demo.ts`. Hermes
-answers questions from the real MCP evidence; the board content around it is
-not yet loaded from PostgreSQL.
-
-**My games** — games grouped in Rapid, Blitz, Bullet, Daily, and Bot folders
-(bot games carry their time control). Each game opens at its key moment with
-the played move and the Stockfish alternative drawn as arrows, a navigable
-move list, a 3D position graph, and a Hermes review.
+**My games** — games from `GET /api/games`, grouped in Rapid, Blitz, Bullet,
+Daily, and Bot folders (bot games carry their time control). The account name
+comes from `GET /api/player`, which reads `CHESS_USERNAME` on the server.
+Opening a game loads `GET /api/games/{id}/moves` and starts at the move with
+the largest stored centipawn loss. The played move and the stored Stockfish
+alternative are drawn as arrows, with a navigable move list, a 3D position
+graph, and a Hermes review. A folder with no rows says that no games are
+stored. A failed request shows the error and a retry.
 
 **Recap** — rating bands from `GET /api/recap`. Vite proxies that path to the
 FastAPI process (`BACKEND_URL`, default `http://127.0.0.1:8000`). The headline
@@ -66,8 +74,8 @@ src/
 ├── views/                Training, My games, Recap
 ├── hooks/                chess clock, coach conversation, element size
 ├── lib/                  clock rules, chess.js helpers, graph builder, stats
-├── services/coach.ts     demo Hermes transport (HERMES_API_URL / HERMES_API_KEY later)
-└── data/                 types and demo content
+├── services/coach.ts     Hermes transport through the Vite proxy
+└── data/                 types, API loaders, and synthetic test fixtures
 ```
 
 ## Libraries

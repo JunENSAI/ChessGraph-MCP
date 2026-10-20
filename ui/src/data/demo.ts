@@ -1,7 +1,10 @@
-import type { GameCategory, LibraryGame, RatingBand, TrainingTrack } from './types'
+import type { LibraryGame, RatingBand, TrainingTrack } from './types'
 
-// Demo content: replaced by PostgreSQL, Neo4j, and Stockfish MCP results
-// once the UI is connected to Hermes-Agent.
+/**
+ * Synthetic board fixtures for unit tests. The coach does not load this file.
+ * Training reads `/api/lessons/*` and My games reads `/api/games`. These lines
+ * are invented positions, not an export of anyone's games.
+ */
 
 export const TRAINING_TRACKS: TrainingTrack[] = [
   {
@@ -68,14 +71,6 @@ export const TRAINING_TRACKS: TrainingTrack[] = [
     ],
   },
 ]
-
-export const CATEGORY_LABELS: Record<GameCategory, string> = {
-  rapid: 'Rapid',
-  blitz: 'Blitz',
-  bullet: 'Bullet',
-  daily: 'Daily',
-  bot: 'Bot',
-}
 
 export const LIBRARY: LibraryGame[] = [
   {

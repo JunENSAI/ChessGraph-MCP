@@ -21,8 +21,8 @@ import { ChessBoard } from '../components/ChessBoard'
 import { CoachPanel } from '../components/CoachPanel'
 import { EvalBar } from '../components/EvalBar'
 import { PlayerBar } from '../components/PlayerBar'
-import { CATEGORY_LABELS } from '../data/demo'
 import {
+  CATEGORY_LABELS,
   keyMomentFromMoves,
   loadGameMoves,
   loadGamesPage,
@@ -76,6 +76,18 @@ const emptyFolder = (): FolderPage => ({
   error: null,
 })
 
+const emptyLibrary = (): Record<GameCategory, FolderPage> => ({
+  rapid: emptyFolder(),
+  blitz: emptyFolder(),
+  bullet: emptyFolder(),
+  daily: emptyFolder(),
+  bot: emptyFolder(),
+})
+
+function loadError(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback
+}
+
 function wantsBoardLine(question: string): boolean {
   return /\b(play|replay|continu|line|mate|follow)\b/i.test(question)
 }
@@ -103,19 +115,17 @@ function reviewIntro(game: ReviewedGame) {
 
 export function GamesView({ active }: { active: boolean }) {
   const keepThread = useRef(loadThread('review') !== null)
+  const [libraryAttempt, setLibraryAttempt] = useState(0)
+  const [playerStatus, setPlayerStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [username, setUsername] = useState<string | null>(null)
   const [libraryError, setLibraryError] = useState<string | null>(null)
   const [openFolders, setOpenFolders] = useState<Set<GameCategory>>(() => new Set(['rapid']))
-  const [folders, setFolders] = useState<Record<GameCategory, FolderPage>>(() => ({
-    rapid: emptyFolder(),
-    blitz: emptyFolder(),
-    bullet: emptyFolder(),
-    daily: emptyFolder(),
-    bot: emptyFolder(),
-  }))
+  const [folders, setFolders] = useState<Record<GameCategory, FolderPage>>(emptyLibrary)
   const [gameId, setGameId] = useState<number | null>(null)
   const [detail, setDetail] = useState<ReviewedGame | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [movesAttempt, setMovesAttempt] = useState(0)
+  const [movesStatus, setMovesStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [ply, setPly] = useState(0)
   const [line, setLine] = useState<{ startFen: string; moves: ReplayedPly[]; index: number } | null>(null)
   const lineToken = useRef(0)
@@ -149,17 +159,29 @@ export function GamesView({ active }: { active: boolean }) {
 
   useEffect(() => {
     let activeLoad = true
+    setPlayerStatus('loading')
+    setLibraryError(null)
+    setUsername(null)
+    setFolders(emptyLibrary())
+    setGameId(null)
+    setDetail(null)
+    setDetailError(null)
+    setMovesStatus('idle')
     loadPlayerName()
       .then(name => {
-        if (activeLoad) setUsername(name)
+        if (!activeLoad) return
+        setUsername(name)
+        setPlayerStatus('ready')
       })
       .catch((reason: unknown) => {
-        if (activeLoad) setLibraryError(reason instanceof Error ? reason.message : 'Games could not be loaded.')
+        if (!activeLoad) return
+        setLibraryError(loadError(reason, 'Games could not be loaded.'))
+        setPlayerStatus('error')
       })
     return () => {
       activeLoad = false
     }
-  }, [])
+  }, [libraryAttempt])
 
   const fetchPage = (category: GameCategory, offset: number) => {
     if (!username) return
@@ -190,12 +212,12 @@ export function GamesView({ active }: { active: boolean }) {
       .catch((reason: unknown) => {
         setFolders(current => ({
           ...current,
-            [category]: {
-              ...current[category],
-              loading: false,
-              settled: true,
-              error: reason instanceof Error ? reason.message : 'This time control could not be loaded.',
-            },
+          [category]: {
+            ...current[category],
+            loading: false,
+            settled: true,
+            error: loadError(reason, 'This time control could not be loaded.'),
+          },
         }))
       })
   }
@@ -210,7 +232,9 @@ export function GamesView({ active }: { active: boolean }) {
   useEffect(() => {
     if (!listed) return
     let activeLoad = true
+    setDetail(null)
     setDetailError(null)
+    setMovesStatus('loading')
     loadGameMoves(listed.id)
       .then(stored => {
         if (!activeLoad) return
@@ -223,6 +247,7 @@ export function GamesView({ active }: { active: boolean }) {
           keyMoment: keyMomentFromMoves(stored, listed.userColor, replay),
         }
         setDetail(review)
+        setMovesStatus('ready')
         setLine(null)
         setPly(review.keyMoment ? Math.max(0, review.keyMoment.ply - 1) : 0)
         setOrientation(review.userColor)
@@ -234,14 +259,16 @@ export function GamesView({ active }: { active: boolean }) {
         coach.reset([reviewIntro(review)])
       })
       .catch((reason: unknown) => {
-        if (activeLoad) setDetailError(reason instanceof Error ? reason.message : 'This game could not be loaded.')
+        if (!activeLoad) return
+        setMovesStatus('error')
+        setDetailError(loadError(reason, 'This game could not be loaded.'))
       })
     return () => {
       activeLoad = false
     }
     // coach.reset is stable. Reloading follows the selected game.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listed?.id])
+  }, [listed?.id, movesAttempt])
 
   const atKeyRoot = Boolean(detail?.keyMoment && ply === detail.keyMoment.ply - 1 && detail.keyMoment.showEngine !== false)
   const bestMove = useMemo(() => {
@@ -400,15 +427,16 @@ export function GamesView({ active }: { active: boolean }) {
   }
 
   const game = detail
+  const shown = game ?? listed
   const selectedNodeId = `ply-${ply}`
   const selectedNode = graph?.nodes.find(node => node.id === selectedNodeId)
-  const userIsWhite = game?.userColor === 'white'
+  const userIsWhite = shown?.userColor === 'white'
   const topColor = orientation === 'white' ? 'black' : 'white'
   const playerFor = (color: 'white' | 'black') => {
-    if (!game) return { name: color === 'white' ? 'White' : 'Black' }
+    if (!shown) return { name: color === 'white' ? 'White' : 'Black' }
     return (color === 'white') === userIsWhite
-      ? { name: 'Junior', rating: game.userElo ?? undefined }
-      : { name: game.opponent, rating: game.opponentElo ?? undefined }
+      ? { name: 'Junior', rating: shown.userElo ?? undefined }
+      : { name: shown.opponent, rating: shown.opponentElo ?? undefined }
   }
   const moveLabel = line
     ? line.index === 0
@@ -426,9 +454,16 @@ export function GamesView({ active }: { active: boolean }) {
           <div>
             <h2 className="panel-title">My games</h2>
             <p className="panel-subtitle">
-              {libraryError ?? 'Your games, grouped by time control'}
+              {playerStatus === 'loading'
+                ? 'Reading your games…'
+                : libraryError ?? 'Your games, grouped by time control'}
             </p>
           </div>
+          {playerStatus === 'error' && (
+            <button type="button" className="btn" onClick={() => setLibraryAttempt(count => count + 1)}>
+              Try again
+            </button>
+          )}
         </header>
         <div className="scroll-pane">
           {CATEGORY_ORDER.map(category => {
@@ -447,7 +482,7 @@ export function GamesView({ active }: { active: boolean }) {
                   <Icon size={13} className="folder-kind" />
                   <span>{CATEGORY_LABELS[category]}</span>
                   <span className="count">
-                    {folder.settled ? `${folder.games.length}${folder.hasMore ? '+' : ''}` : '…'}
+                    {playerStatus === 'error' ? '—' : folder.settled ? `${folder.games.length}${folder.hasMore ? '+' : ''}` : '…'}
                   </span>
                 </button>
                 <AnimatePresence initial={false}>
@@ -460,8 +495,23 @@ export function GamesView({ active }: { active: boolean }) {
                       transition={{ duration: 0.18 }}
                     >
                       {category === 'bot' && <p className="folder-note">Bot games, labeled by time control.</p>}
-                      {!folder.settled && <p className="folder-note">Loading games…</p>}
-                      {folder.error && <p className="folder-note">{folder.error}</p>}
+                      {playerStatus === 'loading' && <p className="folder-note">Reading your games…</p>}
+                      {(folder.loading || (playerStatus === 'ready' && !folder.settled)) && (
+                        <p className="folder-note">Loading games…</p>
+                      )}
+                      {folder.error && (
+                        <div className="folder-note">
+                          <p>{folder.error}</p>
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={folder.loading}
+                            onClick={() => fetchPage(category, folder.nextOffset)}
+                          >
+                            Try again
+                          </button>
+                        </div>
+                      )}
                       {folder.settled && !folder.error && folder.games.length === 0 && (
                         <p className="folder-note">No games stored.</p>
                       )}
@@ -506,17 +556,24 @@ export function GamesView({ active }: { active: boolean }) {
         <header className="panel-head">
           <div>
             <h2 className="panel-title">
-              {game?.opening ?? 'Game'} {game && <span className="eco">{game.eco}</span>}
+              {shown?.opening ?? 'Game'} {shown && <span className="eco">{shown.eco}</span>}
             </h2>
             <p className="panel-subtitle">
               {detailError
                 ? detailError
-                : line
-                  ? `Better line · ${line.moves[0]?.san ?? '…'} instead of your move · ${line.index} of ${line.moves.length}${lineResult ? ` · ${lineResult}` : ''}`
-                  : game
-                    ? `${CATEGORY_LABELS[game.category]} · ${game.timeControl} · ${RESULT_LABEL[game.result]}`
-                    : 'Choose a game'}
+                : movesStatus === 'loading'
+                  ? 'Loading moves…'
+                  : line
+                    ? `Better line · ${line.moves[0]?.san ?? '…'} instead of your move · ${line.index} of ${line.moves.length}${lineResult ? ` · ${lineResult}` : ''}`
+                    : shown
+                      ? `${CATEGORY_LABELS[shown.category]} · ${shown.timeControl} · ${RESULT_LABEL[shown.result]}`
+                      : 'Choose a game'}
             </p>
+            {detailError && (
+              <button type="button" className="btn" onClick={() => setMovesAttempt(count => count + 1)}>
+                Try again
+              </button>
+            )}
           </div>
           <button
             type="button"
@@ -628,7 +685,11 @@ export function GamesView({ active }: { active: boolean }) {
           <div className="key-card">
             <div>
               <span className="eyebrow">Key moment</span>
-              {game?.keyMoment ? (
+              {movesStatus === 'loading' ? (
+                <strong>Loading moves…</strong>
+              ) : movesStatus === 'error' ? (
+                <strong>Moves could not be loaded.</strong>
+              ) : game?.keyMoment ? (
                 <>
                   <strong>
                     {game.keyMoment.played}
@@ -648,7 +709,7 @@ export function GamesView({ active }: { active: boolean }) {
                   </span>
                 </>
               ) : (
-                <strong>No stored evaluation for this game.</strong>
+                <strong>{shown ? 'No stored evaluation for this game.' : 'Choose a game.'}</strong>
               )}
             </div>
             <span className="node-chip">{selectedNode?.label ?? 'Start'}</span>

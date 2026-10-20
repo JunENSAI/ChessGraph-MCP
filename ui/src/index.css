@@ -869,6 +869,10 @@ p {
   font-size: 11px;
 }
 
+.folder-note .btn {
+  margin-top: 6px;
+}
+
 .game-row {
   width: 100%;
   display: grid;

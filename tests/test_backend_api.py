@@ -1,7 +1,10 @@
+from datetime import date
+
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.main import create_app
-from chess_mcp.postgres.models import EndgameLesson, OpeningLesson, PlayerSummary
+from chess_mcp.postgres.models import EndgameLesson, GameMove, GameSummary, OpeningLesson, PlayerSummary
 from chess_mcp.postgres.recap import build_recap
 
 
@@ -137,6 +140,118 @@ def test_games_default_to_the_configured_player(monkeypatch) -> None:
     assert arguments["offset"] == 25
     assert arguments["limit"] == 25
     assert arguments["game_type"] == "rapid"
+
+
+class LibraryPostgres(FakePostgres):
+    def list_games(self, **arguments: object):
+        self.arguments = arguments
+        return [
+            GameSummary(
+                game_id=4,
+                game_hash="synthetic",
+                game_type="rapid",
+                played_date=date(2026, 4, 2),
+                white_username="white",
+                black_username="black",
+                white_elo=1500,
+                black_elo=1480,
+                result="1-0",
+                time_control_raw="600",
+                eco_code="C50",
+                opening_name="Italian Game",
+            )
+        ]
+
+    def get_game_moves(self, game_id: int, *, start_ply: int = 1, limit: int = 100):
+        self.move_call = (game_id, start_ply, limit)
+        return [
+            GameMove(
+                move_id=9,
+                game_id=game_id,
+                ply_number=start_ply,
+                move_number=1,
+                turn_color="w",
+                san_move="e4",
+                uci_move="e2e4",
+                fen_before_norm="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -",
+                fen_after_norm="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -",
+                eval_cp_after=20,
+                cp_loss=0,
+                best_move_uci="e2e4",
+            )
+        ]
+
+
+class EmptyLessons(FakePostgres):
+    def list_opening_lessons(self, **arguments: object):
+        return []
+
+
+class DownPostgres(FakePostgres):
+    def list_opening_lessons(self, **arguments: object):
+        raise SQLAlchemyError("connection refused")
+
+
+def test_games_list_serializes_summaries(monkeypatch) -> None:
+    postgres = LibraryPostgres()
+    monkeypatch.setattr("backend.main.get_chess_username", lambda: "white")
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/games", params={"game_type": "rapid", "limit": 25})
+    assert response.status_code == 200
+    game = response.json()["games"][0]
+    assert game["game_id"] == 4
+    assert game["played_date"] == "2026-04-02"
+    assert game["opening_name"] == "Italian Game"
+    assert game["white_username"] == "white"
+    assert game["black_username"] == "black"
+    assert postgres.arguments["player"] == "white"
+    assert postgres.arguments["limit"] == 25
+
+
+def test_game_moves_keep_the_stored_evaluation() -> None:
+    postgres = LibraryPostgres()
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/games/4/moves", params={"start_ply": 1, "limit": 100})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["game_id"] == 4
+    assert body["start_ply"] == 1
+    assert body["moves"][0]["san_move"] == "e4"
+    assert body["moves"][0]["uci_move"] == "e2e4"
+    assert body["moves"][0]["cp_loss"] == 0
+    assert body["moves"][0]["best_move_uci"] == "e2e4"
+    assert postgres.move_call == (4, 1, 100)
+
+
+def test_game_page_size_is_bounded() -> None:
+    client = TestClient(create_app(postgres=FakePostgres()))
+    assert client.get("/api/games", params={"limit": 101, "player": "white"}).status_code == 422
+    assert client.get("/api/games/4/moves", params={"limit": 101}).status_code == 422
+    assert client.get("/api/games", params={"offset": 100_001, "player": "white"}).status_code == 422
+
+
+def test_games_require_a_configured_player(monkeypatch) -> None:
+    postgres = LessonPostgres()
+    monkeypatch.setattr("backend.main.get_chess_username", lambda: "  ")
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/games")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "CHESS_USERNAME is not set"
+    assert postgres.calls == []
+
+
+def test_opening_lessons_can_be_empty() -> None:
+    client = TestClient(create_app(postgres=EmptyLessons()))
+    response = client.get("/api/lessons/openings", params={"color": "black", "player": "white"})
+    assert response.status_code == 200
+    assert response.json() == {"lessons": []}
+
+
+def test_lesson_route_reports_postgres_down() -> None:
+    client = TestClient(create_app(postgres=DownPostgres()))
+    response = client.get("/api/lessons/openings", params={"color": "white", "player": "white"})
+    assert response.status_code == 503
+    assert response.json()["error"] == "PostgreSQL is not accepting connections."
 
 
 def test_missing_graph_position_is_not_found() -> None:

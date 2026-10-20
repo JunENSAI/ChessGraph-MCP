@@ -38,6 +38,17 @@ function engineShouldResign(scoreType: 'cp' | 'mate', scoreValue: number, fen: s
   return scoreType === 'cp' && scoreValue <= -1500
 }
 
+function catalogSubtitle(
+  status: 'loading' | 'ready' | 'error',
+  error: string | null,
+  lessonCount: number,
+): string {
+  if (status === 'loading') return 'Reading stored lessons…'
+  if (error) return error
+  if (lessonCount === 0) return 'No lessons are stored for this account.'
+  return 'Stored lines from your games.'
+}
+
 function introFor(session: LessonSession | null) {
   if (!session) return 'Choose an opening, a defense, an endgame, or a color to play.'
   if (session.missingLine) return `${session.title}. ${session.detail}`
@@ -51,6 +62,8 @@ function introFor(session: LessonSession | null) {
 
 export function TrainingView() {
   const keepThread = useRef(loadThread('training') !== null)
+  const [catalogAttempt, setCatalogAttempt] = useState(0)
+  const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [openings, setOpenings] = useState<OpeningLesson[]>([])
   const [defenses, setDefenses] = useState<OpeningLesson[]>([])
   const [endgames, setEndgames] = useState<EndgameLesson[]>([])
@@ -226,6 +239,8 @@ export function TrainingView() {
 
   useEffect(() => {
     let active = true
+    setCatalogStatus('loading')
+    setCatalogError(null)
     Promise.all([loadOpeningLessons('white'), loadOpeningLessons('black'), loadEndgameLessons()])
       .then(([white, black, endgame]) => {
         if (!active) return
@@ -233,6 +248,7 @@ export function TrainingView() {
         setDefenses(black)
         setEndgames(endgame.lessons)
         setCatalogError(null)
+        setCatalogStatus('ready')
         const whiteFamilies = groupOpenings(white)
         const blackFamilies = groupOpenings(black)
         if (blackFamilies[0]) {
@@ -244,19 +260,23 @@ export function TrainingView() {
           const first = whiteFamilies[0].variants[0].lesson
           setOpeningFamily(whiteFamilies[0].name)
           setOpeningName(first.openingName)
-          loadSession(sessionFromOpening(first, 'white'), !keepThread.current)
-          keepThread.current = false
+          if (!sessionRef.current) {
+            loadSession(sessionFromOpening(first, 'white'), !keepThread.current)
+            keepThread.current = false
+          }
         }
       })
       .catch((reason: unknown) => {
-        if (active) setCatalogError(reason instanceof Error ? reason.message : 'Lessons could not be loaded.')
+        if (!active) return
+        setCatalogStatus('error')
+        setCatalogError(reason instanceof Error && reason.message ? reason.message : 'Lessons could not be loaded.')
       })
     return () => {
       active = false
     }
-    // The catalog is loaded once. Later choices call loadSession directly.
+    // Later choices call loadSession directly. Retry increments catalogAttempt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [catalogAttempt])
 
   const scripted = Boolean(session && !session.enginePlay && !againstEngine && !session.missingLine)
   const expected = scripted ? session?.line[step] : undefined
@@ -481,7 +501,9 @@ export function TrainingView() {
           <div>
             <h2 className="panel-title">{session ? session.title : 'Lessons'}</h2>
             <p className="panel-subtitle">
-              {progress} · {statusText}
+              {!session && catalogStatus === 'loading'
+                ? 'Reading stored lessons…'
+                : `${progress} · ${statusText}`}
               {mistakes > 0 ? ` · ${mistakes} retr${mistakes === 1 ? 'y' : 'ies'}` : ''}
             </p>
           </div>
@@ -621,8 +643,15 @@ export function TrainingView() {
         <header className="panel-head">
           <div>
             <h2 className="panel-title">Lessons</h2>
-            {catalogError && <p className="panel-subtitle">{catalogError}</p>}
+            <p className="panel-subtitle">
+              {catalogSubtitle(catalogStatus, catalogError, openings.length + defenses.length + endgames.length)}
+            </p>
           </div>
+          {catalogStatus === 'error' && (
+            <button type="button" className="btn" onClick={() => setCatalogAttempt(count => count + 1)}>
+              Try again
+            </button>
+          )}
         </header>
         <div className="scroll-pane">
           <article
@@ -638,9 +667,11 @@ export function TrainingView() {
               <select
                 value={openingFamily}
                 onChange={event => chooseOpeningFamily(event.target.value)}
-                disabled={openingFamilies.length === 0}
+                disabled={catalogStatus !== 'ready' || openingFamilies.length === 0}
               >
-                {openingFamilies.length === 0 && <option value="">No openings stored</option>}
+                {catalogStatus === 'loading' && <option value="">Loading lessons…</option>}
+                {catalogStatus === 'error' && <option value="">Lessons unavailable</option>}
+                {catalogStatus === 'ready' && openingFamilies.length === 0 && <option value="">No openings stored</option>}
                 {openingFamilies.map(item => (
                   <option key={item.name} value={item.name}>
                     {item.name} · {item.games}
@@ -676,9 +707,11 @@ export function TrainingView() {
               <select
                 value={defenseFamily}
                 onChange={event => chooseDefenseFamily(event.target.value)}
-                disabled={defenseFamilies.length === 0}
+                disabled={catalogStatus !== 'ready' || defenseFamilies.length === 0}
               >
-                {defenseFamilies.length === 0 && <option value="">No defenses stored</option>}
+                {catalogStatus === 'loading' && <option value="">Loading lessons…</option>}
+                {catalogStatus === 'error' && <option value="">Lessons unavailable</option>}
+                {catalogStatus === 'ready' && defenseFamilies.length === 0 && <option value="">No defenses stored</option>}
                 {defenseFamilies.map(item => (
                   <option key={item.name} value={item.name}>
                     {item.name} · {item.games}
@@ -714,9 +747,11 @@ export function TrainingView() {
               <select
                 value={endgameId}
                 onChange={event => chooseEndgame(event.target.value)}
-                disabled={endgames.length === 0}
+                disabled={catalogStatus !== 'ready' || endgames.length === 0}
               >
-                {endgames.length === 0 && <option value="">No techniques stored</option>}
+                {catalogStatus === 'loading' && <option value="">Loading lessons…</option>}
+                {catalogStatus === 'error' && <option value="">Lessons unavailable</option>}
+                {catalogStatus === 'ready' && endgames.length === 0 && <option value="">No techniques stored</option>}
                 {endgames.map(item => (
                   <option key={endgameKey(item)} value={endgameKey(item)}>
                     {endgameTitle(item.endgameType)}

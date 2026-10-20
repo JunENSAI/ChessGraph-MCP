@@ -164,10 +164,26 @@ async function readError(response: Response, fallback: string): Promise<string> 
   return fallback
 }
 
-export async function loadOpeningLessons(color: Color): Promise<OpeningLesson[]> {
-  const response = await fetch(`/api/lessons/openings?color=${color}&limit=40`)
-  if (!response.ok) throw new Error(await readError(response, `Opening list failed (${response.status}).`))
-  const body = (await response.json()) as { lessons?: OpeningLessonJson[] }
+async function requestJson<T>(url: string, fetchImpl: typeof fetch, fallback: string): Promise<T> {
+  let response: Response
+  try {
+    response = await fetchImpl(url)
+  } catch {
+    throw new Error('The retrieval API is not responding.')
+  }
+  if (!response.ok) throw new Error(await readError(response, fallback))
+  return (await response.json()) as T
+}
+
+export async function loadOpeningLessons(
+  color: Color,
+  fetchImpl: typeof fetch = fetch,
+): Promise<OpeningLesson[]> {
+  const body = await requestJson<{ lessons?: OpeningLessonJson[] }>(
+    `/api/lessons/openings?color=${color}&limit=40`,
+    fetchImpl,
+    'Opening list failed.',
+  )
   return (body.lessons ?? []).map(lesson => ({
     openingName: lesson.opening_name,
     ecoCode: lesson.eco_code,
@@ -177,10 +193,14 @@ export async function loadOpeningLessons(color: Color): Promise<OpeningLesson[]>
   }))
 }
 
-export async function loadEndgameLessons(): Promise<{ eloTier: string | null; lessons: EndgameLesson[] }> {
-  const response = await fetch('/api/lessons/endgames')
-  if (!response.ok) throw new Error(await readError(response, `Endgame list failed (${response.status}).`))
-  const body = (await response.json()) as { elo_tier?: string | null; lessons?: EndgameLessonJson[] }
+export async function loadEndgameLessons(
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ eloTier: string | null; lessons: EndgameLesson[] }> {
+  const body = await requestJson<{ elo_tier?: string | null; lessons?: EndgameLessonJson[] }>(
+    '/api/lessons/endgames',
+    fetchImpl,
+    'Endgame list failed.',
+  )
   return {
     eloTier: body.elo_tier ?? null,
     lessons: (body.lessons ?? []).map(lesson => ({

@@ -4,6 +4,14 @@ import type { Color, GameCategory, KeyMoment, Outcome } from './types'
 
 export const GAMES_PAGE = 25
 
+export const CATEGORY_LABELS: Record<GameCategory, string> = {
+  rapid: 'Rapid',
+  blitz: 'Blitz',
+  bullet: 'Bullet',
+  daily: 'Daily',
+  bot: 'Bot',
+}
+
 export interface ListedGame {
   id: number
   category: GameCategory
@@ -119,10 +127,23 @@ async function readError(response: Response, fallback: string): Promise<string> 
   return fallback
 }
 
-export async function loadPlayerName(): Promise<string> {
-  const response = await fetch('/api/player')
-  if (!response.ok) throw new Error(await readError(response, `Player request failed (${response.status}).`))
-  const body = (await response.json()) as { username?: string }
+async function requestJson<T>(url: string, fetchImpl: typeof fetch, fallback: string): Promise<T> {
+  let response: Response
+  try {
+    response = await fetchImpl(url)
+  } catch {
+    throw new Error('The retrieval API is not responding.')
+  }
+  if (!response.ok) throw new Error(await readError(response, fallback))
+  return (await response.json()) as T
+}
+
+export async function loadPlayerName(fetchImpl: typeof fetch = fetch): Promise<string> {
+  const body = await requestJson<{ username?: string }>(
+    '/api/player',
+    fetchImpl,
+    'Player request failed.',
+  )
   if (!body.username) throw new Error('The player summary has no username.')
   return body.username
 }
@@ -131,15 +152,18 @@ export async function loadGamesPage(
   username: string,
   category: GameCategory,
   offset: number,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ games: ListedGame[]; rawCount: number; hasMore: boolean }> {
   const params = new URLSearchParams({
     game_type: category,
     limit: String(GAMES_PAGE),
     offset: String(offset),
   })
-  const response = await fetch(`/api/games?${params}`)
-  if (!response.ok) throw new Error(await readError(response, `Game list failed (${response.status}).`))
-  const body = (await response.json()) as { games?: GameJson[] }
+  const body = await requestJson<{ games?: GameJson[] }>(
+    `/api/games?${params}`,
+    fetchImpl,
+    'Game list failed.',
+  )
   const games = (body.games ?? []).flatMap(row => {
     const game = listedGame(row, username)
     return game ? [game] : []
@@ -148,14 +172,16 @@ export async function loadGamesPage(
   return { games, rawCount, hasMore: rawCount === GAMES_PAGE }
 }
 
-export async function loadGameMoves(gameId: number): Promise<StoredMove[]> {
+export async function loadGameMoves(gameId: number, fetchImpl: typeof fetch = fetch): Promise<StoredMove[]> {
   const stored: StoredMove[] = []
   let start = 1
   for (;;) {
     const params = new URLSearchParams({ start_ply: String(start), limit: '100' })
-    const response = await fetch(`/api/games/${gameId}/moves?${params}`)
-    if (!response.ok) throw new Error(await readError(response, `Moves request failed (${response.status}).`))
-    const body = (await response.json()) as { moves?: MoveJson[] }
+    const body = await requestJson<{ moves?: MoveJson[] }>(
+      `/api/games/${gameId}/moves?${params}`,
+      fetchImpl,
+      'Moves request failed.',
+    )
     const page = body.moves ?? []
     for (const move of page) {
       stored.push({
