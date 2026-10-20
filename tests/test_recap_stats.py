@@ -7,20 +7,24 @@ def test_favorite_line_is_the_most_played_stored_name() -> None:
         ("1900-1999", "white", "Italian Game", "C50", "loss", 1),
         ("1900-1999", "white", "Queen's Pawn Game: London System", "D02", "win", 40),
         ("1900-1999", "white", "Queen's Pawn Game: London System", "D02", "loss", 10),
+        ("1900-1999", "white", "London System", "A48", "win", 5),
         ("1900-1999", "black", "Scandinavian Defense: Main Line", "B01", "win", 12),
+        ("1900-1999", "black", "Scandinavian Defense", "B01", "win", 4),
         ("1900-1999", "black", "Caro-Kann Defense", "B10", "win", 5),
     ]
     payload = build_recap(rows, [("1900-1999", "rapid", "win", 70)]).model_dump(by_alias=True)
     band = next(item for item in payload["bands"] if item["id"] == "1900-1999")
 
-    assert band["openingsWhite"][0]["name"] == "Queen's Pawn Game: London System"
-    assert band["openingsWhite"][0]["results"] == {"wins": 40, "draws": 0, "losses": 10}
-    assert band["white"] == {"wins": 42, "draws": 0, "losses": 11}
-    assert band["defensesBlack"][0]["name"] == "Scandinavian Defense: Main Line"
+    assert band["openingsWhite"][0]["name"] == "London System"
+    assert band["openingsWhite"][0]["eco"] == "D02"
+    assert band["openingsWhite"][0]["results"] == {"wins": 45, "draws": 0, "losses": 10}
+    assert band["white"] == {"wins": 47, "draws": 0, "losses": 11}
+    assert band["defensesBlack"][0]["name"] == "Scandinavian Defense"
+    assert band["defensesBlack"][0]["results"] == {"wins": 16, "draws": 0, "losses": 0}
     assert band["timeControls"][0]["label"] == "Rapid"
     assert band["timeControls"][0]["averageOpponentElo"] is None
     assert band["openingsWhite"][1]["name"] == "Italian Game"
-    assert payload["gameCount"] == 70
+    assert payload["gameCount"] == 79
 
 
 def test_clock_profile_keeps_elo_averages_on_the_time_control() -> None:

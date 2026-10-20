@@ -1,4 +1,5 @@
 import { Chess } from 'chess.js'
+import { endgameTitle } from './openings'
 import { tryUci } from '../lib/chess'
 import type { Color, TrainingStep } from './types'
 
@@ -125,7 +126,7 @@ export function sessionFromEndgame(lesson: EndgameLesson): LessonSession | null 
     : []
   return {
     id: `endgame:${lesson.endgameType}:${lesson.fenFull}`,
-    title: lesson.endgameType.replaceAll('_', ' '),
+    title: endgameTitle(lesson.endgameType),
     detail: applied
       ? `${lesson.pieceCount} pieces · ${lesson.eloTier ?? 'stored position'}`
       : 'The stored technique move is not legal in this position.',
@@ -164,7 +165,7 @@ async function readError(response: Response, fallback: string): Promise<string> 
 }
 
 export async function loadOpeningLessons(color: Color): Promise<OpeningLesson[]> {
-  const response = await fetch(`/api/lessons/openings?color=${color}`)
+  const response = await fetch(`/api/lessons/openings?color=${color}&limit=40`)
   if (!response.ok) throw new Error(await readError(response, `Opening list failed (${response.status}).`))
   const body = (await response.json()) as { lessons?: OpeningLessonJson[] }
   return (body.lessons ?? []).map(lesson => ({

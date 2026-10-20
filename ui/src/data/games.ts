@@ -103,6 +103,7 @@ export function keyMomentFromMoves(stored: StoredMove[], userColor: Color, plies
     evalBefore,
     evalAfter,
     explanation: best ? 'Largest stored centipawn loss.' : 'The engine move was not stored.',
+    bestUci: best ? top.bestUci ?? undefined : undefined,
     cpLoss: top.cpLoss ?? undefined,
     showEngine: Boolean(best),
   }

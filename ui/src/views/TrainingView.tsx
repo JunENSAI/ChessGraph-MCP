@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chess, type Square } from 'chess.js'
-import { ArrowUpDown, Lightbulb, Pause, Play, RotateCcw } from 'lucide-react'
+import { ArrowUpDown, Flag, Lightbulb, Pause, Play, RotateCcw } from 'lucide-react'
 import { ChessBoard, type BoardMove } from '../components/ChessBoard'
 import { CoachPanel } from '../components/CoachPanel'
 import { EvalBar } from '../components/EvalBar'
@@ -15,24 +15,35 @@ import {
   type LessonSession,
   type OpeningLesson,
 } from '../data/lessons'
+import { endgameTitle, groupOpenings } from '../data/openings'
 import type { Color } from '../data/types'
 import { useChessClock } from '../hooks/useChessClock'
 import { useCoach } from '../hooks/useCoach'
 import { usePositionEval } from '../hooks/usePositionEval'
-import { gameStatus, sideToMove, tryMove, tryUci } from '../lib/chess'
+import { gameStatus, resultText, sideToMove, tryMove, tryUci, type Promotion } from '../lib/chess'
+import type { WhiteEval } from '../lib/eval'
 import { TIME_CONTROLS } from '../lib/clock'
 import { createMessage, loadThread } from '../services/coach'
 import { analyzeFen, EngineError } from '../services/engine'
 
 const START_FEN = new Chess().fen()
 const MOVE_DELAY_MS = 420
+/** Stockfish often answers in a few milliseconds. Spend at least this long so the clock actually changes. */
+const ENGINE_REFLECTION_MS = 1000
+
+function engineShouldResign(scoreType: 'cp' | 'mate', scoreValue: number, fen: string): boolean {
+  const moveNumber = Number(fen.split(' ')[5] ?? '1')
+  if (!Number.isFinite(moveNumber) || moveNumber < 6) return false
+  if (scoreType === 'mate' && scoreValue < 0) return true
+  return scoreType === 'cp' && scoreValue <= -1500
+}
 
 function introFor(session: LessonSession | null) {
   if (!session) return 'Choose an opening, a defense, an endgame, or a color to play.'
   if (session.missingLine) return `${session.title}. ${session.detail}`
   if (session.enginePlay) {
     const side = session.userColor === 'white' ? 'White' : 'Black'
-    return `You play ${side}. Stockfish plays the other side and I explain the move after it is on the board. Pause the clock if you want to read.`
+    return `You play ${side}. Stockfish plays the other side. After each of its moves the clock stays paused until you press Continue, so you can read the explanation.`
   }
   const side = session.userColor === 'white' ? 'White' : 'Black'
   return `${session.title}: you play ${side}. Play the lesson move; the reply follows on the board.`
@@ -44,7 +55,9 @@ export function TrainingView() {
   const [defenses, setDefenses] = useState<OpeningLesson[]>([])
   const [endgames, setEndgames] = useState<EndgameLesson[]>([])
   const [catalogError, setCatalogError] = useState<string | null>(null)
+  const [openingFamily, setOpeningFamily] = useState('')
   const [openingName, setOpeningName] = useState('')
+  const [defenseFamily, setDefenseFamily] = useState('')
   const [defenseName, setDefenseName] = useState('')
   const [endgameId, setEndgameId] = useState('')
   const [playColor, setPlayColor] = useState<Color>('white')
@@ -55,6 +68,11 @@ export function TrainingView() {
   const [againstEngine, setAgainstEngine] = useState(false)
   const [lastMove, setLastMove] = useState<BoardMove | null>(null)
   const [showHint, setShowHint] = useState(false)
+  const [engineHint, setEngineHint] = useState<{ from: Square; to: Square } | null>(null)
+  const [resigned, setResigned] = useState<'w' | 'b' | null>(null)
+  const [engineResigned, setEngineResigned] = useState(false)
+  const [reading, setReading] = useState(false)
+  const [preview, setPreview] = useState<{ fen: string; evaluation: WhiteEval } | null>(null)
   const [mistakes, setMistakes] = useState(0)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
   const [opponentThinking, setOpponentThinking] = useState(false)
@@ -62,8 +80,12 @@ export function TrainingView() {
   const control = TIME_CONTROLS.find(item => item.id === controlId)!
   const clock = useChessClock(control)
   const coach = useCoach('training', [createMessage('coach', introFor(null))])
-  const evaluation = usePositionEval(fen)
+  const evaluation = usePositionEval(fen, preview?.fen === fen ? preview.evaluation : null)
   const fenRef = useRef(fen)
+  const clockRef = useRef(clock)
+  clockRef.current = clock
+  const sessionRef = useRef(session)
+  sessionRef.current = session
   const pending = useRef<number | null>(null)
   const engineToken = useRef(0)
   fenRef.current = fen
@@ -88,14 +110,42 @@ export function TrainingView() {
     )
   }
 
+  const stopForResult = (position: string) => {
+    const text = resultText(position)
+    if (!text) return false
+    clockRef.current.pause()
+    coach.say(text)
+    return true
+  }
+
   const engineReply = (fromFen: string, title: string) => {
     const token = ++engineToken.current
+    const thinkingSide = sideToMove(fromFen)
     setOpponentThinking(true)
-    clock.pause()
+    setReading(false)
+    setShowHint(false)
+    const startedAt = performance.now()
+    clockRef.current.start()
     void (async () => {
       try {
         const analysis = await analyzeFen(fromFen)
+        const elapsed = performance.now() - startedAt
+        if (elapsed < ENGINE_REFLECTION_MS) await wait(ENGINE_REFLECTION_MS - elapsed)
         if (token !== engineToken.current || fenRef.current !== fromFen) return
+        if (clockRef.current.flagged === thinkingSide) {
+          coach.say(`${thinkingSide === 'w' ? 'White' : 'Black'} lost on time`)
+          return
+        }
+        if (
+          sessionRef.current?.enginePlay &&
+          engineShouldResign(analysis.scoreType, analysis.scoreValue, fromFen)
+        ) {
+          clockRef.current.pause()
+          setEngineResigned(true)
+          const side = thinkingSide === 'w' ? 'White' : 'Black'
+          coach.say(`${side} resigns.`)
+          return
+        }
         const applied = tryUci(fromFen, analysis.uci)
         if (!applied) {
           coach.say('Stockfish returned a move that is not legal in this position.')
@@ -104,7 +154,11 @@ export function TrainingView() {
         setFen(applied.fen)
         fenRef.current = applied.fen
         setLastMove({ from: applied.from, to: applied.to })
-        clock.press()
+        setPreview({ fen: applied.fen, evaluation: analysis.white })
+        if (stopForResult(applied.fen)) return
+        clockRef.current.press()
+        clockRef.current.pause()
+        setReading(true)
         explainMove(applied.san, analysis.side, analysis.evalText, applied.fen, title)
       } catch (error) {
         if (token !== engineToken.current) return
@@ -128,6 +182,11 @@ export function TrainingView() {
       setFen(applied.fen)
       fenRef.current = applied.fen
       setLastMove({ from: applied.from, to: applied.to })
+      if (stopForResult(applied.fen)) {
+        setStep(index + 1)
+        setOpponentThinking(false)
+        return
+      }
       clock.press()
       coach.say(lesson.line[index].explanation)
       const next = index + 1
@@ -151,6 +210,11 @@ export function TrainingView() {
     setAgainstEngine(next.enginePlay)
     setLastMove(null)
     setShowHint(false)
+    setEngineHint(null)
+    setResigned(null)
+    setEngineResigned(false)
+    setReading(false)
+    setPreview(null)
     setMistakes(0)
     setOrientation(next.userColor)
     clock.reset(control, sideToMove(next.startFen))
@@ -169,11 +233,18 @@ export function TrainingView() {
         setDefenses(black)
         setEndgames(endgame.lessons)
         setCatalogError(null)
-        if (black[0]) setDefenseName(black[0].openingName)
+        const whiteFamilies = groupOpenings(white)
+        const blackFamilies = groupOpenings(black)
+        if (blackFamilies[0]) {
+          setDefenseFamily(blackFamilies[0].name)
+          setDefenseName(blackFamilies[0].variants[0].lesson.openingName)
+        }
         if (endgame.lessons[0]) setEndgameId(endgameKey(endgame.lessons[0]))
-        if (white[0]) {
-          setOpeningName(white[0].openingName)
-          loadSession(sessionFromOpening(white[0], 'white'), !keepThread.current)
+        if (whiteFamilies[0]) {
+          const first = whiteFamilies[0].variants[0].lesson
+          setOpeningFamily(whiteFamilies[0].name)
+          setOpeningName(first.openingName)
+          loadSession(sessionFromOpening(first, 'white'), !keepThread.current)
           keepThread.current = false
         }
       })
@@ -190,36 +261,74 @@ export function TrainingView() {
   const scripted = Boolean(session && !session.enginePlay && !againstEngine && !session.missingLine)
   const expected = scripted ? session?.line[step] : undefined
   const userSide = session ? (session.userColor === 'white' ? 'w' : 'b') : 'w'
-  const status = gameStatus(fen)
-  const terminal = status === 'Checkmate' || Boolean(status?.startsWith('Draw'))
+  const outcome = resultText(fen)
+  const terminal = outcome !== null
   const scriptDone = Boolean(session && scripted && step >= session.line.length && !session.engineAfter)
-  const complete = terminal || scriptDone
+  const complete = terminal || scriptDone || resigned !== null || engineResigned || Boolean(session?.enginePlay && clock.flagged)
   const interactive =
     Boolean(session) &&
     !session?.missingLine &&
     !clock.flagged &&
     !opponentThinking &&
+    !reading &&
     !complete &&
     sideToMove(fen) === userSide
 
   const hintArrow = useMemo(() => {
-    if (!showHint || !expected || !interactive) return []
+    if (!showHint) return []
+    if (engineHint) return [{ startSquare: engineHint.from, endSquare: engineHint.to, color: '#bb9af7' }]
+    if (!expected || !interactive) return []
     const applied = tryMoveSan(fen, expected.san)
     if (!applied) return []
     return [{ startSquare: applied.from, endSquare: applied.to, color: '#bb9af7' }]
-  }, [showHint, expected, interactive, fen])
+  }, [showHint, engineHint, expected, interactive, fen])
 
-  const handleMove = (from: Square, to: Square) => {
+  const requestEngineHint = async () => {
+    if (showHint) {
+      setShowHint(false)
+      return
+    }
+    try {
+      const analysis = await analyzeFen(fen, { limitType: 'time', limitValue: 400 })
+      const from = analysis.uci.slice(0, 2) as Square
+      const to = analysis.uci.slice(2, 4) as Square
+      setEngineHint({ from, to })
+      setShowHint(true)
+      coach.say(`Hint: ${analysis.san}.`)
+    } catch (error) {
+      coach.say(error instanceof EngineError ? error.message : 'Stockfish could not offer a hint.')
+    }
+  }
+
+  const rematch = () => {
+    if (!session?.enginePlay) return
+    loadSession(playSession(session.userColor), true)
+  }
+
+  const resign = () => {
+    if (!session?.enginePlay || complete) return
+    cancelPending()
+    clock.pause()
+    setResigned(userSide)
+    const winner = userSide === 'w' ? 'Black' : 'White'
+    coach.say(`You resigned. ${winner} wins.`)
+  }
+
+  const handleMove = (from: Square, to: Square, promotion?: Promotion) => {
     if (!interactive || !session) return false
-    const applied = tryMove(fen, from, to)
+    const applied = tryMove(fen, from, to, promotion)
     if (!applied) return false
 
     if (againstEngine || session.enginePlay) {
+      setReading(false)
       setFen(applied.fen)
       fenRef.current = applied.fen
       setLastMove({ from, to })
+      setShowHint(false)
+      setEngineHint(null)
+      setPreview(null)
+      if (stopForResult(applied.fen)) return true
       clock.press()
-      if (gameStatus(applied.fen)) return true
       engineReply(applied.fen, session.title)
       return true
     }
@@ -246,6 +355,11 @@ export function TrainingView() {
     return true
   }
 
+  const openingFamilies = useMemo(() => groupOpenings(openings), [openings])
+  const defenseFamilies = useMemo(() => groupOpenings(defenses), [defenses])
+  const openingVariants = openingFamilies.find(item => item.name === openingFamily)?.variants ?? []
+  const defenseVariants = defenseFamilies.find(item => item.name === defenseFamily)?.variants ?? []
+
   const chooseOpening = (name: string) => {
     const lesson = openings.find(item => item.openingName === name)
     if (!lesson) return
@@ -254,12 +368,28 @@ export function TrainingView() {
     loadSession(sessionFromOpening(lesson, 'white'), true)
   }
 
+  const chooseOpeningFamily = (name: string) => {
+    const family = openingFamilies.find(item => item.name === name)
+    const lesson = family?.variants[0]?.lesson
+    if (!lesson) return
+    setOpeningFamily(name)
+    chooseOpening(lesson.openingName)
+  }
+
   const chooseDefense = (name: string) => {
     const lesson = defenses.find(item => item.openingName === name)
     if (!lesson) return
     setActiveKind('defense')
     setDefenseName(name)
     loadSession(sessionFromOpening(lesson, 'black'), true)
+  }
+
+  const chooseDefenseFamily = (name: string) => {
+    const family = defenseFamilies.find(item => item.name === name)
+    const lesson = family?.variants[0]?.lesson
+    if (!lesson) return
+    setDefenseFamily(name)
+    chooseDefense(lesson.openingName)
   }
 
   const chooseEndgame = (id: string) => {
@@ -319,15 +449,30 @@ export function TrainingView() {
     : session && !session.missingLine
       ? `Move ${Math.min(step + 1, Math.max(session.line.length, 1))} of ${session.line.length}`
       : 'Lesson'
-  const statusText = flaggedSide
-    ? `${flaggedSide} lost on time`
-    : scriptDone
-      ? 'Lesson complete'
-        : opponentThinking
-        ? againstEngine || session?.enginePlay
-          ? 'Stockfish is moving…'
-          : 'Book is replying…'
-        : status ?? `${sideToMove(fen) === 'w' ? 'White' : 'Black'} to move`
+  const engineResignation = engineResigned
+    ? `${session?.userColor === 'white' ? 'Black' : 'White'} resigned · You win`
+    : null
+  const resignation =
+    resigned === null ? null : `${resigned === 'w' ? 'White' : 'Black'} resigned · ${resigned === 'w' ? 'Black' : 'White'} wins`
+  const statusText = engineResignation
+    ? engineResignation
+    : resignation
+    ? resignation
+    : flaggedSide
+      ? `${flaggedSide} lost on time`
+      : outcome
+        ? outcome
+        : scriptDone
+          ? 'Lesson complete'
+            : opponentThinking
+            ? againstEngine || session?.enginePlay
+              ? 'Stockfish is moving…'
+              : 'Book is replying…'
+            : reading
+              ? coach.phase === 'idle'
+                ? 'Clock paused — press Continue when you have read it'
+                : 'Clock paused while Hermes explains'
+              : gameStatus(fen) ?? `${sideToMove(fen) === 'w' ? 'White' : 'Black'} to move`
 
   return (
     <div className="view training-view">
@@ -352,6 +497,16 @@ export function TrainingView() {
           <div className="board-and-eval">
             <EvalBar orientation={orientation} evaluation={evaluation.evaluation} pending={evaluation.pending} />
             <div className="board-frame">
+              {(session?.enginePlay ? complete : Boolean(outcome || resignation)) && (
+                <div className="board-result">
+                  <p>{statusText}</p>
+                  {session?.enginePlay && (
+                    <button type="button" className="btn primary" onClick={rematch}>
+                      <RotateCcw size={14} /> Rematch
+                    </button>
+                  )}
+                </div>
+              )}
               <ChessBoard
                 id="training-board"
                 fen={fen}
@@ -375,11 +530,18 @@ export function TrainingView() {
           <button
             type="button"
             className="btn primary"
-            disabled={Boolean(clock.flagged) || complete}
-            onClick={clock.running ? clock.pause : clock.start}
+            disabled={Boolean(clock.flagged) || complete || (reading && coach.phase !== 'idle')}
+            onClick={() => {
+              if (clock.running) {
+                clock.pause()
+                return
+              }
+              setReading(false)
+              clock.start()
+            }}
           >
             {clock.running ? <Pause size={14} /> : <Play size={14} />}
-            {clock.running ? 'Pause' : 'Start'}
+            {clock.running ? 'Pause' : reading ? 'Continue' : 'Start'}
           </button>
           <label className="select-wrap">
             <span className="sr-only">Time control</span>
@@ -391,14 +553,22 @@ export function TrainingView() {
               ))}
             </select>
           </label>
-          {scripted && (
+          {(scripted || session?.enginePlay) && (
             <button
               type="button"
               className={`btn${showHint ? ' active' : ''}`}
-              disabled={!interactive}
-              onClick={() => setShowHint(value => !value)}
+              disabled={!interactive && !showHint}
+              onClick={() => {
+                if (session?.enginePlay) void requestEngineHint()
+                else setShowHint(value => !value)
+              }}
             >
               <Lightbulb size={14} /> Hint
+            </button>
+          )}
+          {session?.enginePlay && (
+            <button type="button" className="btn" disabled={complete} onClick={resign}>
+              <Flag size={14} /> Resign
             </button>
           )}
           <span className="spacer" />
@@ -429,6 +599,12 @@ export function TrainingView() {
         prompts={['Why this move?', 'What is the plan?', 'Common mistakes here']}
         onAsk={question => {
           const fromFen = fenRef.current
+          const playing = Boolean(session?.enginePlay || againstEngine)
+          const usersTurn = sideToMove(fromFen) === userSide
+          if (playing && usersTurn && !complete && !clock.flagged) {
+            clock.pause()
+            setReading(true)
+          }
           void coach
             .ask(question, {
               mode: 'training',
@@ -460,19 +636,31 @@ export function TrainingView() {
             <label>
               <span className="sr-only">Opening</span>
               <select
-                value={openingName}
-                onChange={event => chooseOpening(event.target.value)}
-                disabled={openings.length === 0}
+                value={openingFamily}
+                onChange={event => chooseOpeningFamily(event.target.value)}
+                disabled={openingFamilies.length === 0}
               >
-                {openings.length === 0 && <option value="">No openings stored</option>}
-                {openings.map(item => (
-                  <option key={item.openingName} value={item.openingName}>
-                    {item.openingName} · {item.games}
+                {openingFamilies.length === 0 && <option value="">No openings stored</option>}
+                {openingFamilies.map(item => (
+                  <option key={item.name} value={item.name}>
+                    {item.name} · {item.games}
                   </option>
                 ))}
               </select>
             </label>
-            <span>Top 5 lines you have played as White</span>
+            {openingVariants.length > 1 && (
+              <label>
+                <span className="sr-only">Opening variant</span>
+                <select value={openingName} onChange={event => chooseOpening(event.target.value)}>
+                  {openingVariants.map(item => (
+                    <option key={item.lesson.openingName} value={item.lesson.openingName}>
+                      {item.label} · {item.lesson.games}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <span>Your most played openings. Pick a variant to drill it.</span>
           </article>
 
           <article
@@ -486,19 +674,31 @@ export function TrainingView() {
             <label>
               <span className="sr-only">Defense</span>
               <select
-                value={defenseName}
-                onChange={event => chooseDefense(event.target.value)}
-                disabled={defenses.length === 0}
+                value={defenseFamily}
+                onChange={event => chooseDefenseFamily(event.target.value)}
+                disabled={defenseFamilies.length === 0}
               >
-                {defenses.length === 0 && <option value="">No defenses stored</option>}
-                {defenses.map(item => (
-                  <option key={item.openingName} value={item.openingName}>
-                    {item.openingName} · {item.games}
+                {defenseFamilies.length === 0 && <option value="">No defenses stored</option>}
+                {defenseFamilies.map(item => (
+                  <option key={item.name} value={item.name}>
+                    {item.name} · {item.games}
                   </option>
                 ))}
               </select>
             </label>
-            <span>Top 5 lines you have played as Black</span>
+            {defenseVariants.length > 1 && (
+              <label>
+                <span className="sr-only">Defense variant</span>
+                <select value={defenseName} onChange={event => chooseDefense(event.target.value)}>
+                  {defenseVariants.map(item => (
+                    <option key={item.lesson.openingName} value={item.lesson.openingName}>
+                      {item.label} · {item.lesson.games}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <span>Your most played defenses. Pick a variant to drill it.</span>
           </article>
 
           <article
@@ -519,12 +719,11 @@ export function TrainingView() {
                 {endgames.length === 0 && <option value="">No techniques stored</option>}
                 {endgames.map(item => (
                   <option key={endgameKey(item)} value={endgameKey(item)}>
-                    {item.endgameType.replaceAll('_', ' ')} · {item.pieceCount} pieces
+                    {endgameTitle(item.endgameType)}
                   </option>
                 ))}
               </select>
             </label>
-            <span>Positions near your rating. Stockfish continues after the technique move.</span>
           </article>
 
           <article
@@ -542,7 +741,6 @@ export function TrainingView() {
                 <option value="black">Play as Black</option>
               </select>
             </label>
-            <span>Stockfish moves the other color. If you play Black, White moves first. Pause to read: the clock keeps running.</span>
           </article>
         </div>
       </section>

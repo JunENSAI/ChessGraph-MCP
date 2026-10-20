@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Chessboard, type Arrow } from 'react-chessboard'
 import type { Square } from 'chess.js'
-import { legalTargets, sideToMove } from '../lib/chess'
+import { isPromotion, legalTargets, sideToMove, type Promotion } from '../lib/chess'
 
 export interface BoardMove {
   from: Square
@@ -13,7 +13,7 @@ interface ChessBoardProps {
   fen: string
   orientation: 'white' | 'black'
   interactive: boolean
-  onMove?: (from: Square, to: Square) => boolean
+  onMove?: (from: Square, to: Square, promotion?: Promotion) => boolean
   lastMove?: BoardMove | null
   arrows?: Arrow[]
 }
@@ -31,6 +31,7 @@ export function ChessBoard({ id, fen, orientation, interactive, onMove, lastMove
   // Selection is tied to the position it was made in, so it clears itself
   // whenever the board receives a new FEN.
   const [selection, setSelection] = useState<{ fen: string; square: Square } | null>(null)
+  const [promotion, setPromotion] = useState<{ from: Square; to: Square } | null>(null)
   const selected = selection?.fen === fen ? selection.square : null
   const turn = sideToMove(fen)
   const targets = useMemo(() => (selected ? legalTargets(fen, selected) : []), [fen, selected])
@@ -64,12 +65,26 @@ export function ChessBoard({ id, fen, orientation, interactive, onMove, lastMove
     return styles
   }, [lastMove, selected, targets, occupied])
 
-  const attempt = (from: Square, to: Square) => {
+  const attempt = (from: Square, to: Square, piece?: Promotion) => {
     setSelection(null)
-    return onMove ? onMove(from, to) : false
+    if (!piece && isPromotion(fen, from, to)) {
+      setPromotion({ from, to })
+      return false
+    }
+    setPromotion(null)
+    return onMove ? onMove(from, to, piece) : false
   }
 
+  const promoting = sideToMove(fen) === 'w'
+  const pieces: { id: Promotion; glyph: string; label: string }[] = [
+    { id: 'q', glyph: promoting ? '♕' : '♛', label: 'Queen' },
+    { id: 'r', glyph: promoting ? '♖' : '♜', label: 'Rook' },
+    { id: 'b', glyph: promoting ? '♗' : '♝', label: 'Bishop' },
+    { id: 'n', glyph: promoting ? '♘' : '♞', label: 'Knight' },
+  ]
+
   return (
+    <div className="chess-board-wrap">
     <Chessboard
       options={{
         id,
@@ -105,5 +120,21 @@ export function ChessBoard({ id, fen, orientation, interactive, onMove, lastMove
         },
       }}
     />
+      {promotion && (
+        <div className="promo-dialog" role="dialog" aria-label="Choose the promotion piece">
+          {pieces.map(piece => (
+            <button
+              key={piece.id}
+              type="button"
+              className={promoting ? '' : 'black-piece'}
+              aria-label={piece.label}
+              onClick={() => attempt(promotion.from, promotion.to, piece.id)}
+            >
+              {piece.glyph}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

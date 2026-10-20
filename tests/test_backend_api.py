@@ -41,7 +41,7 @@ def test_recap_route_returns_the_repository_ranking() -> None:
     response = client.get("/api/recap")
     assert response.status_code == 200
     band = next(item for item in response.json()["bands"] if item["id"] == "2000-plus")
-    assert band["openingsWhite"][0]["name"] == "Queen's Pawn Game: London System"
+    assert band["openingsWhite"][0]["name"] == "London System"
     assert band["openingsWhite"][1]["name"] == "Italian Game"
 
 
