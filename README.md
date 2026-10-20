@@ -2,7 +2,7 @@
 
 # ChessGraph MCP
 
-### A local-first [try] layer for personalized chess coaching
+### A local layer for personalized chess coaching
 
 Connect an MCP-capable agent to personal game history, a positional knowledge
 graph, and reproducible Stockfish analysis—without giving the model unrestricted
