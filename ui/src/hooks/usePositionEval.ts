@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { analyzeFen } from '../services/engine'
+import { resultEval } from '../lib/chess'
+import { analyzeFen, BAR_BUDGET } from '../services/engine'
 import type { WhiteEval } from '../lib/eval'
 
 const EMPTY: WhiteEval = { whiteCp: null, mate: null }
@@ -11,13 +12,14 @@ const EMPTY: WhiteEval = { whiteCp: null, mate: null }
 export function usePositionEval(fen: string, stored?: WhiteEval | null) {
   const [live, setLive] = useState<{ fen: string; evaluation: WhiteEval } | null>(null)
   const [pending, setPending] = useState(false)
+  const finished = resultEval(fen)
   const hasStored = stored != null && (stored.whiteCp !== null || stored.mate !== null)
 
   useEffect(() => {
-    if (hasStored) return
+    if (hasStored || finished) return
     let active = true
     setPending(true)
-    analyzeFen(fen)
+    analyzeFen(fen, BAR_BUDGET)
       .then(result => {
         if (active) setLive({ fen, evaluation: result.white })
       })
@@ -30,8 +32,9 @@ export function usePositionEval(fen: string, stored?: WhiteEval | null) {
     return () => {
       active = false
     }
-  }, [fen, hasStored])
+  }, [fen, hasStored, finished])
 
+  if (finished) return { evaluation: finished, pending: false }
   if (hasStored && stored) return { evaluation: stored, pending: false }
   if (live?.fen === fen) return { evaluation: live.evaluation, pending }
   return { evaluation: EMPTY, pending: true }

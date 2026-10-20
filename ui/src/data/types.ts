@@ -25,6 +25,8 @@ export interface KeyMoment {
   evalBefore: number
   evalAfter: number
   explanation: string
+  /** UCI of the stored Stockfish move, when it differs from the move played. */
+  bestUci?: string
   cpLoss?: number
   /** When false, the stored engine move is missing and the graph stays on the played path. */
   showEngine?: boolean

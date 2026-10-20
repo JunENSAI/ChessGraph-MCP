@@ -152,7 +152,7 @@ def create_app(
     def lesson_openings(
         color: Literal["white", "black"],
         player: str | None = None,
-        limit: int = Query(default=5, ge=1, le=5),
+        limit: int = Query(default=5, ge=1, le=40),
         repo: PostgresRepository = Depends(postgres_repo),
     ):
         return {

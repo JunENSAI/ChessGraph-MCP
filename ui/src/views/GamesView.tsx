@@ -33,10 +33,11 @@ import {
 import type { GameCategory, KeyMoment } from '../data/types'
 import { useCoach } from '../hooks/useCoach'
 import { usePositionEval } from '../hooks/usePositionEval'
-import { replaySan } from '../lib/chess'
+import { replaySan, resultText, tryUci, type ReplayedPly } from '../lib/chess'
 import { whiteEvalFromStored } from '../lib/eval'
 import { NODE_COLORS, buildGameGraph, type GraphNode } from '../lib/graph'
 import { createMessage, loadThread } from '../services/coach'
+import { analyzeFen } from '../services/engine'
 
 const PositionGraph = lazy(() => import('../components/PositionGraph'))
 
@@ -75,6 +76,16 @@ const emptyFolder = (): FolderPage => ({
   error: null,
 })
 
+function wantsBoardLine(question: string): boolean {
+  return /\b(play|replay|continu|line|mate|follow)\b/i.test(question)
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
 function reviewIntro(game: ReviewedGame) {
   const key = game.keyMoment
   if (!key) {
@@ -106,6 +117,8 @@ export function GamesView({ active }: { active: boolean }) {
   const [detail, setDetail] = useState<ReviewedGame | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [ply, setPly] = useState(0)
+  const [line, setLine] = useState<{ startFen: string; moves: ReplayedPly[]; index: number } | null>(null)
+  const lineToken = useRef(0)
   const [showAlternative, setShowAlternative] = useState(true)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
   const coach = useCoach('review', [])
@@ -123,11 +136,16 @@ export function GamesView({ active }: { active: boolean }) {
     () => (detail ? buildGameGraph({ moves: detail.moves, userColor: detail.userColor, keyMoment: detail.keyMoment }) : null),
     [detail],
   )
-  const fen = detail && ply > 0 && plies[ply - 1] ? plies[ply - 1].fenAfter : plies[0]?.fenBefore ?? START_FEN
-  const storedMove = detail && ply > 0 ? detail.stored[ply - 1] : undefined
+  const gameFen = detail && ply > 0 && plies[ply - 1] ? plies[ply - 1].fenAfter : plies[0]?.fenBefore ?? START_FEN
+  const fen = line
+    ? line.index === 0
+      ? line.startFen
+      : line.moves[line.index - 1]?.fenAfter ?? line.startFen
+    : gameFen
+  const storedMove = !line && detail && ply > 0 ? detail.stored[ply - 1] : undefined
   const storedEval =
     storedMove && storedMove.cpAfter !== null ? whiteEvalFromStored(storedMove.cpAfter, storedMove.mover) : null
-  const evaluation = usePositionEval(fen, detail ? storedEval : { whiteCp: 0, mate: null })
+  const evaluation = usePositionEval(fen, line ? null : detail ? storedEval : { whiteCp: 0, mate: null })
 
   useEffect(() => {
     let activeLoad = true
@@ -205,6 +223,7 @@ export function GamesView({ active }: { active: boolean }) {
           keyMoment: keyMomentFromMoves(stored, listed.userColor, replay),
         }
         setDetail(review)
+        setLine(null)
         setPly(review.keyMoment ? Math.max(0, review.keyMoment.ply - 1) : 0)
         setOrientation(review.userColor)
         setShowAlternative(true)
@@ -235,8 +254,15 @@ export function GamesView({ active }: { active: boolean }) {
       return null
     }
   }, [detail, plies])
-  const lastMove = ply === 0 || !plies[ply - 1] ? null : { from: plies[ply - 1].from, to: plies[ply - 1].to }
+  const lastMove = line
+    ? line.index === 0
+      ? null
+      : { from: line.moves[line.index - 1].from, to: line.moves[line.index - 1].to }
+    : ply === 0 || !plies[ply - 1]
+      ? null
+      : { from: plies[ply - 1].from, to: plies[ply - 1].to }
   const arrows =
+    !line &&
     atKeyRoot && showAlternative && bestMove && plies[ply]
       ? [
           { startSquare: plies[ply].from, endSquare: plies[ply].to, color: NODE_COLORS.mistake },
@@ -244,19 +270,27 @@ export function GamesView({ active }: { active: boolean }) {
         ]
       : []
 
-  const goTo = (target: number) => setPly(Math.max(0, Math.min(plies.length, target)))
+  const goTo = (target: number) => {
+    if (line) {
+      setLine(current =>
+        current ? { ...current, index: Math.max(0, Math.min(current.moves.length, target)) } : current,
+      )
+      return
+    }
+    setPly(Math.max(0, Math.min(plies.length, target)))
+  }
 
   useEffect(() => {
     if (!active) return
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
       if (event.target instanceof HTMLSelectElement) return
-      if (event.key === 'ArrowLeft') setPly(value => Math.max(0, value - 1))
-      if (event.key === 'ArrowRight') setPly(value => Math.min(plies.length, value + 1))
+      if (event.key === 'ArrowLeft') goTo((line?.index ?? ply) - 1)
+      if (event.key === 'ArrowRight') goTo((line?.index ?? ply) + 1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, plies.length])
+  }, [active, plies.length, line, ply])
 
   const toggleFolder = (category: GameCategory) => {
     setOpenFolders(current => {
@@ -269,9 +303,97 @@ export function GamesView({ active }: { active: boolean }) {
     if (!folder.loading && folder.games.length === 0) fetchPage(category, 0)
   }
 
+  const showLine = async (startFen: string, moves: string[]) => {
+    const token = ++lineToken.current
+    const played: ReplayedPly[] = []
+    let current = startFen
+    setLine({ startFen, moves: [], index: 0 })
+    for (const uci of moves) {
+      if (token !== lineToken.current) return
+      const applied = tryUci(current, uci)
+      if (!applied) break
+      played.push({
+        ply: played.length + 1,
+        san: applied.san,
+        from: applied.from,
+        to: applied.to,
+        fenBefore: current,
+        fenAfter: applied.fen,
+      })
+      current = applied.fen
+      setLine({ startFen, moves: [...played], index: played.length })
+      await wait(360)
+      if (resultText(current)) return
+    }
+  }
+
+  const correction = () => {
+    const key = detail?.keyMoment
+    if (!key?.bestUci || !key.showEngine) return null
+    const root = plies[key.ply - 1]
+    const played = detail?.stored.find(move => move.ply === key.ply)
+    if (!root || !played || played.uci === key.bestUci) return null
+    return { fen: root.fenBefore, uci: key.bestUci, played: key.played, best: key.best }
+  }
+
+  const playBetter = () => {
+    const fix = correction()
+    if (!fix) {
+      coach.say('No different Stockfish move is stored for this mistake.')
+      return
+    }
+    setPly(detail!.keyMoment!.ply - 1)
+    setShowAlternative(true)
+    coach.say(`You played ${fix.played}. Stockfish preferred ${fix.best}. Playing that line, not the game.`)
+    void playContinuation(fix.fen, [fix.uci])
+  }
+
+  const playContinuation = async (startFen: string, seed: string[]) => {
+    const token = ++lineToken.current
+    const played: ReplayedPly[] = []
+    let current = startFen
+    setLine({ startFen, moves: [], index: 0 })
+    const push = async (uci: string) => {
+      if (token !== lineToken.current) return false
+      const applied = tryUci(current, uci)
+      if (!applied) return false
+      played.push({
+        ply: played.length + 1,
+        san: applied.san,
+        from: applied.from,
+        to: applied.to,
+        fenBefore: current,
+        fenAfter: applied.fen,
+      })
+      current = applied.fen
+      setLine({ startFen, moves: [...played], index: played.length })
+      await wait(280)
+      return token === lineToken.current
+    }
+    for (const uci of seed) {
+      if (!(await push(uci))) return
+      if (resultText(current)) break
+    }
+    while (played.length < 20 && !resultText(current)) {
+      try {
+        const analysis = await analyzeFen(current, { limitType: 'time', limitValue: 400 })
+        if (!(await push(analysis.uci))) return
+      } catch {
+        break
+      }
+    }
+    const text = resultText(current)
+    if (token === lineToken.current && text) coach.say(`${text} on the recommended line.`)
+  }
+
   const selectNode = (node: GraphNode) => {
-    goTo(node.ply)
-    if (detail?.keyMoment && (node.kind === 'best' || node.kind === 'mistake')) {
+    if (node.kind === 'best') {
+      playBetter()
+      return
+    }
+    setLine(null)
+    setPly(Math.max(0, Math.min(plies.length, node.ply)))
+    if (detail?.keyMoment && node.kind === 'mistake') {
       setPly(detail.keyMoment.ply - 1)
       setShowAlternative(true)
     }
@@ -288,7 +410,14 @@ export function GamesView({ active }: { active: boolean }) {
       ? { name: 'Junior', rating: game.userElo ?? undefined }
       : { name: game.opponent, rating: game.opponentElo ?? undefined }
   }
-  const moveLabel = ply === 0 ? 'Start' : graph?.nodes[ply]?.label ?? `Move ${ply}`
+  const moveLabel = line
+    ? line.index === 0
+      ? 'Line start'
+      : `${line.index}. ${line.moves[line.index - 1]?.san ?? ''}`
+    : ply === 0
+      ? 'Start'
+      : graph?.nodes[ply]?.label ?? `Move ${ply}`
+  const lineResult = line ? resultText(fen) : null
 
   return (
     <div className="view games-view">
@@ -382,9 +511,11 @@ export function GamesView({ active }: { active: boolean }) {
             <p className="panel-subtitle">
               {detailError
                 ? detailError
-                : game
-                  ? `${CATEGORY_LABELS[game.category]} · ${game.timeControl} · ${RESULT_LABEL[game.result]}`
-                  : 'Choose a game'}
+                : line
+                  ? `Better line · ${line.moves[0]?.san ?? '…'} instead of your move · ${line.index} of ${line.moves.length}${lineResult ? ` · ${lineResult}` : ''}`
+                  : game
+                    ? `${CATEGORY_LABELS[game.category]} · ${game.timeControl} · ${RESULT_LABEL[game.result]}`
+                    : 'Choose a game'}
             </p>
           </div>
           <button
@@ -401,6 +532,7 @@ export function GamesView({ active }: { active: boolean }) {
           <div className="board-and-eval">
             <EvalBar orientation={orientation} evaluation={evaluation.evaluation} pending={evaluation.pending} />
             <div className="board-frame">
+              {lineResult && <div className="board-result">{lineResult}</div>}
               <ChessBoard
                 id="review-board"
                 fen={fen}
@@ -421,6 +553,19 @@ export function GamesView({ active }: { active: boolean }) {
             <ChevronLeft size={15} />
           </button>
           <span className="ply-label">{moveLabel}</span>
+          <button
+            type="button"
+            className="btn"
+            disabled={!game || coach.phase !== 'idle'}
+            onClick={playBetter}
+          >
+            Better move
+          </button>
+          {line && (
+            <button type="button" className="btn" onClick={() => setLine(null)}>
+              Game
+            </button>
+          )}
           <button type="button" className="btn icon" aria-label="Next move" onClick={() => goTo(ply + 1)}>
             <ChevronRight size={15} />
           </button>
@@ -518,13 +663,25 @@ export function GamesView({ active }: { active: boolean }) {
         messages={coach.messages}
         phase={coach.phase}
         prompts={['Why was this a mistake?', 'Show my usual plan', 'Similar positions']}
-        onAsk={question =>
-          coach.ask(question, {
-            mode: 'review',
-            fen,
-            summary: game ? `${game.opening}, ${moveLabel}` : 'game',
-          })
-        }
+        onAsk={question => {
+          const fromFen = fen
+          void coach
+            .ask(question, {
+              mode: 'review',
+              fen: fromFen,
+              summary: game ? `${game.opening}, ${moveLabel}` : 'game',
+            })
+            .then(reply => {
+              const fix = correction()
+              if (wantsBoardLine(question) && fix) {
+                setPly(detail!.keyMoment!.ply - 1)
+                void playContinuation(fix.fen, [fix.uci])
+                return
+              }
+              const seed = reply?.play ?? []
+              if (seed.length > 0) void showLine(fromFen, seed)
+            })
+        }}
       />
     </div>
   )

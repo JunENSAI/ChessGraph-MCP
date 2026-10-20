@@ -86,6 +86,22 @@ def _add(counts: dict[str, int], outcome: str, amount: int) -> None:
         counts[key] += amount
 
 
+def opening_family(name: str) -> str:
+    """One display name for an opening and its stored variations.
+
+    London lines stay London System even when the database prefixes Queen's
+    Pawn Game. Other names use the text before the first colon, so
+    Scandinavian Defense and Scandinavian Defense: Main Line are one opening.
+    """
+    text = " ".join(name.split())
+    if "london" in text.lower():
+        return "London System"
+    head, separator, _tail = text.partition(":")
+    if separator:
+        return head.strip()
+    return text
+
+
 def build_recap(
     rows: list[tuple],
     time_rows: list[tuple],
@@ -110,15 +126,35 @@ def build_recap(
         elo[(band, game_type)] = (average_opponent, average_win, average_loss)
 
     def top_lines(band: str, color: str) -> list[OpeningLineStat]:
-        matching = [
-            (name, eco, counts)
-            for (row_band, row_color, name, eco), counts in lines.items()
-            if row_band == band and row_color == color
-        ]
-        matching.sort(key=lambda item: (-sum(item[2].values()), item[0], item[1]))
+        grouped: dict[str, dict[str, int]] = {}
+        eco_games: dict[tuple[str, str], int] = {}
+        for (row_band, row_color, name, eco), counts in lines.items():
+            if row_band != band or row_color != color:
+                continue
+            family = opening_family(name)
+            bucket = grouped.setdefault(family, _empty())
+            for key in ("wins", "draws", "losses"):
+                bucket[key] += counts[key]
+            eco_games[(family, eco)] = eco_games.get((family, eco), 0) + sum(counts.values())
+
+        def primary_eco(family: str) -> str:
+            choices = [
+                (eco, games)
+                for (row_family, eco), games in eco_games.items()
+                if row_family == family
+            ]
+            choices.sort(key=lambda item: (-item[1], item[0]))
+            return choices[0][0] if choices else "—"
+
+        matching = list(grouped.items())
+        matching.sort(key=lambda item: (-sum(item[1].values()), item[0]))
         return [
-            OpeningLineStat(name=name, eco=eco, results=OutcomeCounts.model_validate(counts))
-            for name, eco, counts in matching[:TOP_LINES]
+            OpeningLineStat(
+                name=family,
+                eco=primary_eco(family),
+                results=OutcomeCounts.model_validate(counts),
+            )
+            for family, counts in matching[:TOP_LINES]
         ]
 
     def time_controls(band: str) -> list[TimeControlStat]:

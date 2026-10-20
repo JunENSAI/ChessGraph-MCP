@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts'
 import { StatCard } from '../components/StatCard'
-import { busiestBand, chartLabel, clockGameCounts, loadRecap, mostPlayedClock, mostPlayedLine } from '../data/recap'
+import { busiestBand, clockGameCounts, loadRecap, mostPlayedClock, mostPlayedLine } from '../data/recap'
 import type { OpeningStat, RecapBand, RecapPayload, TimeControlStat } from '../data/types'
 import { share, totalGames, winRate } from '../lib/stats'
 
@@ -27,7 +27,7 @@ const COLORS = { win: '#b8f05a', draw: '#8d96a5', loss: '#ff7b72' }
 
 function repertoireRows(items: OpeningStat[]) {
   return items.map(item => ({
-    name: chartLabel(item.name, item.eco),
+    name: item.name,
     fullName: item.name,
     eco: item.eco,
     Wins: item.results.wins,
@@ -46,7 +46,7 @@ function RepertoireChart({ items }: { items: OpeningStat[] }) {
           <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
             <CartesianGrid stroke={GRID} horizontal={false} />
             <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
-            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={88} />
+            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={190} />
             <Tooltip {...TOOLTIP} />
             <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar dataKey="Wins" stackId="r" fill={COLORS.win} radius={[4, 0, 0, 4]} />
@@ -275,9 +275,7 @@ export function RecapView() {
 function RecapBands({ payload }: { payload: RecapPayload }) {
   const initial = busiestBand(payload.bands)
   const [bandId, setBandId] = useState(initial?.id ?? '')
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(['openings', 'defenses', 'colors', 'clocks']),
-  )
+  const [expanded, setExpanded] = useState<string | null>(null)
   const band = payload.bands.find(item => item.id === bandId) ?? initial
 
   if (!band) {
@@ -289,13 +287,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
     )
   }
 
-  const toggle = (id: string) =>
-    setExpanded(current => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const toggle = (id: string) => setExpanded(current => (current === id ? null : id))
   const whiteTotal = totalGames(band.white)
   const blackTotal = totalGames(band.black)
   const topOpening = mostPlayedLine(band.openingsWhite)
@@ -378,7 +370,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Most played lines · White"
           headline={topOpening?.name ?? 'No games'}
           caption={lineCaption(topOpening, whiteTotal)}
-          expanded={expanded.has('openings')}
+          expanded={expanded === 'openings'}
           onToggle={toggle}
         >
           <RepertoireChart items={band.openingsWhite} />
@@ -389,7 +381,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Most played lines · Black"
           headline={topDefense?.name ?? 'No games'}
           caption={lineCaption(topDefense, blackTotal)}
-          expanded={expanded.has('defenses')}
+          expanded={expanded === 'defenses'}
           onToggle={toggle}
         >
           <RepertoireChart items={band.defensesBlack} />
@@ -400,7 +392,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Win percentage by color"
           headline={`${winRate(band.white)}% · ${winRate(band.black)}%`}
           caption="White pieces · Black pieces"
-          expanded={expanded.has('colors')}
+          expanded={expanded === 'colors'}
           onToggle={toggle}
         >
           <ColorResultsChart band={band} />
@@ -411,7 +403,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
           title="Results by time control"
           headline={topClock ? `${topClock.label} · ${totalGames(topClock.results)}` : 'No games'}
           caption={topClock ? `${winRate(topClock.results)}% wins in that time control` : 'No stored games'}
-          expanded={expanded.has('clocks')}
+          expanded={expanded === 'clocks'}
           onToggle={toggle}
         >
           <TimeControlChart items={band.timeControls} />
