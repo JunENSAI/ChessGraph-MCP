@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from chess_mcp.postgres.models import PlayerSummary
+from chess_mcp.postgres.models import CoachingBrief, PlayerSummary
 from chess_mcp.postgres.server import POSTGRES_SCHEMA_RESOURCE, create_server
 
 
@@ -89,6 +89,10 @@ class FakeRepository:
         self.calls.append(("lookup_endgame_positions", arguments))
         return arguments["fen"], []
 
+    def get_coaching_brief(self, player: str) -> CoachingBrief:
+        self.calls.append(("get_coaching_brief", {"player": player}))
+        return CoachingBrief(endgames="Endgame type is not stored on games.")
+
 
 def test_server_registers_only_curated_structured_tools() -> None:
     server = create_server(FakeRepository())  # type: ignore[arg-type]
@@ -104,6 +108,7 @@ def test_server_registers_only_curated_structured_tools() -> None:
         "find_position_occurrences",
         "lookup_opening",
         "lookup_endgame_positions",
+        "get_coaching_brief",
     }
     assert all(tool.output_schema is not None for tool in tools)
     assert all(tool.annotations.read_only_hint for tool in tools)
@@ -136,6 +141,17 @@ def test_list_games_returns_structured_output_from_fake_repository() -> None:
             },
         )
     ]
+
+
+def test_coaching_brief_uses_the_configured_player(monkeypatch) -> None:
+    monkeypatch.setattr("chess_mcp.postgres.server.get_chess_username", lambda: "junior")
+    repository = FakeRepository()
+    server = create_server(repository)  # type: ignore[arg-type]
+
+    result = asyncio.run(server.call_tool("get_coaching_brief", {}))
+
+    assert repository.calls == [("get_coaching_brief", {"player": "junior"})]
+    assert result.structured_content["endgames"] == "Endgame type is not stored on games."
 
 
 def test_invalid_arguments_are_actionable_tool_errors() -> None:

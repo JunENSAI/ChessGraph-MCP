@@ -775,6 +775,23 @@ p {
   font-weight: 600;
 }
 
+.track-card .task-choice {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  justify-content: start;
+  padding: 8px;
+  text-align: left;
+  white-space: normal;
+}
+
+.track-card .task-choice span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .track-card {
   cursor: pointer;
 }
