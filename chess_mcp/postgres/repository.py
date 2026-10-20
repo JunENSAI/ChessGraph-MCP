@@ -14,6 +14,7 @@ from chess_mcp.config import PostgresSettings
 
 from .models import (
     Blunder,
+    CoachingBrief,
     EndgameLesson,
     EndgamePosition,
     GameDetail,
@@ -26,7 +27,16 @@ from .models import (
     PositionOccurrence,
     UserOutcome,
 )
-from .recap import BAND_SQL, RecapPayload, build_recap
+from .recap import (
+    BAND_SQL,
+    MIN_CALCULATION_LOSS,
+    MIN_CALCULATION_TIMES,
+    MIN_SPLIT_TIMES,
+    OPENING_PLY,
+    RecapPayload,
+    build_coaching_brief,
+    build_recap,
+)
 
 
 _SET_TIMEOUT = text(
@@ -671,6 +681,215 @@ class PostgresRepository:
             )
         ]
         return build_recap(opening_rows, time_rows, clock_rows)
+
+    def get_coaching_brief(self, player: str) -> CoachingBrief:
+        """Strengths, the weakest opening split, and repeated later mistakes."""
+        if not player.strip():
+            raise ValueError("player is required")
+        owner = """
+            (
+                lower(g.white_username) = lower(:player)
+                OR lower(g.black_username) = lower(:player)
+            )
+            AND (
+                (g.user_color = 'white' AND m.turn_color = 'w')
+                OR (g.user_color = 'black' AND m.turn_color = 'b')
+            )
+        """
+        family_rows = [
+            (row["opening_name"], row["user_color"], row["user_outcome"], int(row["amount"]))
+            for row in self._fetch_all(
+                text(
+                    """
+                    SELECT
+                        btrim(opening_name) AS opening_name,
+                        user_color,
+                        user_outcome,
+                        count(*) AS amount
+                    FROM games
+                    WHERE (
+                        lower(white_username) = lower(:player)
+                        OR lower(black_username) = lower(:player)
+                    )
+                      AND user_color IN ('white', 'black')
+                      AND user_outcome IN ('win', 'loss', 'draw')
+                      AND opening_name IS NOT NULL
+                      AND btrim(opening_name) <> ''
+                    GROUP BY btrim(opening_name), user_color, user_outcome
+                    """
+                ),
+                {"player": player},
+            )
+        ]
+        split_rows = [
+            (
+                row["opening_name"],
+                row["fen_before_norm"],
+                int(row["ply_number"]),
+                row["san_move"],
+                row["uci_move"],
+                row["best_move_uci"],
+                int(row["times"]),
+                row["average_cp_loss"],
+            )
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT
+                        btrim(g.opening_name) AS opening_name,
+                        m.fen_before_norm,
+                        min(m.ply_number) AS ply_number,
+                        m.san_move,
+                        m.uci_move,
+                        m.best_move_uci,
+                        count(*) AS times,
+                        avg(m.cp_loss) AS average_cp_loss
+                    FROM game_moves AS m
+                    JOIN games AS g ON g.game_id = m.game_id
+                    WHERE {owner}
+                      AND g.opening_name IS NOT NULL
+                      AND btrim(g.opening_name) <> ''
+                      AND m.ply_number <= :opening_ply
+                      AND m.best_move_uci IS NOT NULL
+                      AND m.uci_move <> m.best_move_uci
+                    GROUP BY btrim(g.opening_name), m.fen_before_norm, m.san_move, m.uci_move, m.best_move_uci
+                    HAVING count(*) >= :min_times
+                    """
+                ),
+                {"player": player, "opening_ply": OPENING_PLY, "min_times": MIN_SPLIT_TIMES},
+            )
+        ]
+        calculation_rows = [
+            (
+                row["fen_before_norm"],
+                int(row["ply_number"]),
+                row["san_move"],
+                row["uci_move"],
+                row["best_move_uci"],
+                int(row["times"]),
+                row["average_cp_loss"],
+            )
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT
+                        m.fen_before_norm,
+                        min(m.ply_number) AS ply_number,
+                        m.san_move,
+                        m.uci_move,
+                        m.best_move_uci,
+                        count(*) AS times,
+                        avg(m.cp_loss) AS average_cp_loss
+                    FROM game_moves AS m
+                    JOIN games AS g ON g.game_id = m.game_id
+                    WHERE {owner}
+                      AND m.ply_number > :opening_ply
+                      AND m.cp_loss >= :min_cp_loss
+                      AND m.best_move_uci IS NOT NULL
+                      AND m.uci_move <> m.best_move_uci
+                    GROUP BY m.fen_before_norm, m.san_move, m.uci_move, m.best_move_uci
+                    HAVING count(*) >= :min_times
+                    """
+                ),
+                {
+                    "player": player,
+                    "opening_ply": OPENING_PLY,
+                    "min_cp_loss": MIN_CALCULATION_LOSS,
+                    "min_times": MIN_CALCULATION_TIMES,
+                },
+            )
+        ]
+        puzzle_fens = [
+            str(row["fen_before_norm"])
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT m.fen_before_norm
+                    FROM game_moves AS m
+                    JOIN games AS g ON g.game_id = m.game_id
+                    WHERE {owner}
+                      AND m.cp_loss IS NOT NULL
+                    GROUP BY m.fen_before_norm
+                    ORDER BY max(m.cp_loss) DESC
+                    LIMIT 4
+                    """
+                ),
+                {"player": player},
+            )
+        ]
+        theory_rows = [
+            (row["opening_name"], row["uci_line"], row["pgn_line"])
+            for row in self._fetch_all(
+                text(
+                    """
+                    SELECT DISTINCT ON (btrim(opening_name))
+                        btrim(opening_name) AS opening_name,
+                        uci_line,
+                        pgn_line
+                    FROM opening_theory
+                    WHERE btrim(opening_name) ILIKE :french
+                       OR btrim(opening_name) ILIKE :sicilian
+                       OR btrim(opening_name) ILIKE :caro
+                    ORDER BY btrim(opening_name), opening_id
+                    """
+                ),
+                {
+                    "french": "French Defense%",
+                    "sicilian": "Sicilian Defense%",
+                    "caro": "Caro-Kann Defense%",
+                },
+            )
+        ]
+        theory_rows.extend(
+            (row["opening_name"], row["uci_line"], row["pgn_line"])
+            for row in self._fetch_all(
+                text(
+                    """
+                    SELECT DISTINCT ON (btrim(opening_name))
+                        btrim(opening_name) AS opening_name,
+                        uci_line,
+                        pgn_line
+                    FROM opening_theory
+                    WHERE btrim(opening_name) NOT ILIKE '%Defense%'
+                      AND btrim(opening_name) NOT ILIKE '%Defence%'
+                    ORDER BY btrim(opening_name), opening_id
+                    LIMIT 80
+                    """
+                ),
+                {},
+            )
+        )
+        rating_rows = self._fetch_all(
+            text(
+                """
+                SELECT avg(user_elo) AS average_rating
+                FROM games
+                WHERE (
+                    lower(white_username) = lower(:player)
+                    OR lower(black_username) = lower(:player)
+                )
+                  AND user_elo IS NOT NULL
+                """
+            ),
+            {"player": player},
+        )
+        average = rating_rows[0]["average_rating"] if rating_rows else None
+        _tier, endgame_lessons = self.list_endgame_lessons(
+            average_rating=float(average) if average is not None else None,
+            limit=40,
+        )
+        endgame_rows = [
+            (lesson.endgame_type, lesson.fen_full, lesson.human_move_uci, lesson.elo_tier)
+            for lesson in endgame_lessons
+        ]
+        return build_coaching_brief(
+            family_rows,
+            split_rows,
+            calculation_rows,
+            theory_rows,
+            endgame_rows,
+            puzzle_fens,
+        )
 
 
 def _round_elo(value: Any) -> int | None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from typing import Any
 
+from chess_mcp.postgres.recap import ENDGAME_NOTE
 from chess_mcp.postgres.repository import PostgresRepository
 
 
@@ -225,6 +226,37 @@ def test_endgame_lessons_bind_the_rating() -> None:
     assert query_params == {"rating": 1750.4, "limit": 5}
     assert "endgame_theory" in query_sql
     assert "1750.4" not in query_sql
+
+
+def test_coaching_brief_binds_the_player_and_ply_cutoffs() -> None:
+    engine = FakeEngine([])
+    repository = PostgresRepository(
+        engine,  # type: ignore[arg-type]
+        statement_timeout_ms=1000,
+        max_results=20,
+    )
+
+    brief = repository.get_coaching_brief("junior")
+
+    assert brief.target is None
+    assert brief.endgames == ENDGAME_NOTE
+    assert [task.kind for task in brief.tasks] == ["opening", "defense", "endgame", "puzzle"]
+    queries = [item for item in engine.connection.executions if "set_config" not in item[0]]
+    player_queries = [(sql, params) for sql, params in queries if "player" in params]
+    assert player_queries
+    for sql, params in player_queries:
+        assert "junior" not in sql
+        assert params["player"] == "junior"
+    split_sql, split_params = next(item for item in queries if "m.ply_number <= :opening_ply" in item[0])
+    assert split_params["opening_ply"] == 20
+    assert split_params["min_times"] == 3
+    calc_sql, calc_params = next(item for item in queries if "m.ply_number > :opening_ply" in item[0])
+    assert calc_params["min_cp_loss"] == 100
+    assert calc_params["min_times"] == 2
+    theory_params = next(params for _sql, params in queries if params.get("french"))
+    assert theory_params["french"] == "French Defense%"
+    assert theory_params["sicilian"] == "Sicilian Defense%"
+    assert theory_params["caro"] == "Caro-Kann Defense%"
 
 
 def test_close_disposes_engine() -> None:

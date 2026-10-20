@@ -18,6 +18,7 @@ from chess_mcp.errors import tool_failure
 
 from .models import (
     BlundersResult,
+    CoachingBrief,
     EndgamePositionsResult,
     GameMovesResult,
     GameResultDetail,
@@ -58,6 +59,8 @@ are capped at 100 rows (and may be capped lower by server configuration).
   variable. `get_player_summary` uses it when `username` is omitted and
   returns the resolved account in `username`.
 - `pgn_moves_raw` stores the movetext; `total_plies` counts half-moves.
+- `get_coaching_brief` ranks opening families by result and lists repeated
+  moves that differ from `best_move_uci`. Endgame type is not on `games`.
 
 ## game_moves
 - `(game_id, ply_number)` is unique; ply numbers start at 1.
@@ -220,6 +223,19 @@ def create_server(repository: PostgresRepository | None = None) -> MCPServer:
                 _required_text(selected_username),
                 game_type=game_type,
             ),
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_coaching_brief(player: str | None = None) -> CoachingBrief:
+        """Rank strengths and the weakest opening, with the repeated leaving move.
+
+        Omit player to use CHESS_USERNAME from the environment. The endgames
+        field states that endgame type is not stored on games.
+        """
+        selected = _required_text(player) if player is not None else get_chess_username()
+        return _run(
+            "get coaching brief",
+            lambda: get_repository().get_coaching_brief(_required_text(selected)),
         )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)

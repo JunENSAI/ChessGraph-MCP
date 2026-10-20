@@ -186,3 +186,62 @@ class OpeningsResult(PostgresModel):
 class EndgamePositionsResult(PostgresModel):
     normalized_fen: str | None = None
     positions: list[EndgamePosition] = Field(default_factory=list)
+
+
+class CoachingLine(PostgresModel):
+    """One opening family with finished-game results."""
+
+    family: str
+    games: int = Field(ge=0)
+    wins: int = Field(ge=0)
+    draws: int = Field(ge=0)
+    losses: int = Field(ge=0)
+
+
+class CoachingSplit(PostgresModel):
+    """A move the player repeats, beside the stored engine move."""
+
+    fen: str
+    ply: int = Field(ge=1)
+    played_san: str
+    played_uci: str
+    best_uci: str
+    best_san: str
+    times: int = Field(ge=1)
+    average_cp_loss: int = Field(ge=0)
+    mate: bool = False
+
+
+class CoachingTarget(PostgresModel):
+    """The opening family with the worst score, and where the player leaves the stored move."""
+
+    family: str
+    games: int = Field(ge=0)
+    wins: int = Field(ge=0)
+    draws: int = Field(ge=0)
+    losses: int = Field(ge=0)
+    splits: list[CoachingSplit] = Field(default_factory=list)
+
+
+class TrainingTask(PostgresModel):
+    """One drill: a stored line, or puzzle candidates still waiting for a mate search."""
+
+    kind: Literal["opening", "defense", "endgame", "puzzle"]
+    title: str
+    reason: str
+    start_fen: str
+    uci_line: str = ""
+    pgn_line: str = ""
+    user_color: Literal["white", "black"]
+    ready: bool = False
+    puzzle_fens: list[str] = Field(default_factory=list)
+
+
+class CoachingBrief(PostgresModel):
+    """Strengths, one target opening, repeated mistakes, and four training tasks."""
+
+    strengths: list[CoachingLine] = Field(default_factory=list)
+    target: CoachingTarget | None = None
+    calculation: list[CoachingSplit] = Field(default_factory=list)
+    endgames: str
+    tasks: list[TrainingTask] = Field(default_factory=list)

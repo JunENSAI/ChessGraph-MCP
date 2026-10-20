@@ -197,6 +197,13 @@ export function rememberAnswer(
   writeLog(store, log)
 }
 
+const COURSE_QUESTION =
+  /\b(train|weakness|strengths?|openings?|defen[cs]e|london|work on|what should i|(?:common|repeated|my) mistakes?)\b/i
+
+export function isCourseQuestion(question: string): boolean {
+  return COURSE_QUESTION.test(question)
+}
+
 export function buildPrompt(question: string, context: CoachContext): string {
   if (context.played) {
     return [
@@ -208,6 +215,28 @@ export function buildPrompt(question: string, context: CoachContext): string {
     ].join('\n')
   }
   const subject = context.mode === 'training' ? 'training position' : 'position from my game'
+  if (isCourseQuestion(question)) {
+    return [
+      `Position (normalized FEN): ${context.fen}`,
+      `Context: ${subject} — ${context.summary}`,
+      '',
+      question,
+      '',
+      'Call get_coaching_brief first. Cite only fields it returned.',
+      'Name the four training tasks and the reason field of each.',
+      'Then call analyze_position on the task the question is about, with multipv=1.',
+      'Cite depth only from the tool result field limit.value.',
+      'Do not claim an endgame weakness. The brief says endgame type is not stored on games.',
+      'If the brief has no target split, say that evidence is missing and do not invent a move.',
+      '',
+      'Answer in this shape and nothing longer:',
+      'STRENGTH: <one family from the brief>',
+      'TARGET: <the played move and the stored move>',
+      'MOVE: <one SAN move>',
+      '<at most two sentences>',
+      'PLAY: <that one UCI move>',
+    ].join('\n')
+  }
   return [
     `Position (normalized FEN): ${context.fen}`,
     `Context: ${subject} — ${context.summary}`,

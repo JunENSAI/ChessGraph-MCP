@@ -6,14 +6,19 @@ import { CoachPanel } from '../components/CoachPanel'
 import { EvalBar } from '../components/EvalBar'
 import { PlayerBar } from '../components/PlayerBar'
 import {
+  loadCoachingBrief,
   loadEndgameLessons,
   loadOpeningLessons,
+  playableFen,
   playSession,
   sessionFromEndgame,
   sessionFromOpening,
+  sessionFromTask,
+  type CoachingBrief,
   type EndgameLesson,
   type LessonSession,
   type OpeningLesson,
+  type TrainingTask,
 } from '../data/lessons'
 import { endgameTitle, groupOpenings } from '../data/openings'
 import type { Color } from '../data/types'
@@ -41,6 +46,8 @@ function engineShouldResign(scoreType: 'cp' | 'mate', scoreValue: number, fen: s
 function introFor(session: LessonSession | null) {
   if (!session) return 'Choose an opening, a defense, an endgame, or a color to play.'
   if (session.missingLine) return `${session.title}. ${session.detail}`
+  if (session.id.startsWith('task:')) return session.detail
+  if (session.id.startsWith('split:')) return `${session.title}. ${session.detail}`
   if (session.enginePlay) {
     const side = session.userColor === 'white' ? 'White' : 'Black'
     return `You play ${side}. Stockfish plays the other side. After each of its moves the clock stays paused until you press Continue, so you can read the explanation.`
@@ -61,7 +68,10 @@ export function TrainingView() {
   const [defenseName, setDefenseName] = useState('')
   const [endgameId, setEndgameId] = useState('')
   const [playColor, setPlayColor] = useState<Color>('white')
-  const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play'>('opening')
+  const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play' | 'course'>('opening')
+  const [brief, setBrief] = useState<CoachingBrief | null>(null)
+  const [briefStatus, setBriefStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [watching, setWatching] = useState(false)
   const [session, setSession] = useState<LessonSession | null>(null)
   const [fen, setFen] = useState(START_FEN)
   const [step, setStep] = useState(0)
@@ -201,6 +211,42 @@ export function TrainingView() {
     }, MOVE_DELAY_MS)
   }
 
+  const demonstrate = (lesson: LessonSession) => {
+    setWatching(true)
+    clockRef.current.pause()
+    let fenNow = lesson.startFen
+    let index = 0
+    const tick = () => {
+      if (index >= lesson.line.length) {
+        setWatching(false)
+        setFen(lesson.startFen)
+        fenRef.current = lesson.startFen
+        setStep(0)
+        setLastMove(null)
+        coach.say('Your turn. Play the same moves.')
+        const userSideNow = lesson.userColor === 'white' ? 'w' : 'b'
+        if (sideToMove(lesson.startFen) !== userSideNow && lesson.line.length > 0) {
+          playScripted(lesson, lesson.startFen, 0)
+        }
+        return
+      }
+      const applied = tryMoveSan(fenNow, lesson.line[index].san)
+      if (!applied) {
+        setWatching(false)
+        coach.say('The stored line is not legal from this position.')
+        return
+      }
+      fenNow = applied.fen
+      setFen(applied.fen)
+      fenRef.current = applied.fen
+      setLastMove({ from: applied.from, to: applied.to })
+      setStep(index + 1)
+      index += 1
+      pending.current = window.setTimeout(tick, MOVE_DELAY_MS)
+    }
+    pending.current = window.setTimeout(tick, MOVE_DELAY_MS)
+  }
+
   const loadSession = (next: LessonSession, resetCoach: boolean) => {
     cancelPending()
     setSession(next)
@@ -214,11 +260,16 @@ export function TrainingView() {
     setResigned(null)
     setEngineResigned(false)
     setReading(false)
+    setWatching(false)
     setPreview(null)
     setMistakes(0)
     setOrientation(next.userColor)
     clock.reset(control, sideToMove(next.startFen))
     if (resetCoach) coach.reset([createMessage('coach', introFor(next))])
+    if (next.watch && next.line.length > 0) {
+      demonstrate(next)
+      return
+    }
     const opponentStarts = sideToMove(next.startFen) !== (next.userColor === 'white' ? 'w' : 'b')
     if (opponentStarts && next.enginePlay) engineReply(next.startFen, next.title)
     else if (opponentStarts && !next.missingLine && next.line.length > 0) playScripted(next, next.startFen, 0)
@@ -226,6 +277,18 @@ export function TrainingView() {
 
   useEffect(() => {
     let active = true
+    setBriefStatus('loading')
+    loadCoachingBrief()
+      .then(next => {
+        if (!active) return
+        setBrief(next)
+        setBriefStatus('ready')
+      })
+      .catch(() => {
+        if (!active) return
+        setBrief(null)
+        setBriefStatus('error')
+      })
     Promise.all([loadOpeningLessons('white'), loadOpeningLessons('black'), loadEndgameLessons()])
       .then(([white, black, endgame]) => {
         if (!active) return
@@ -270,6 +333,7 @@ export function TrainingView() {
     !session?.missingLine &&
     !clock.flagged &&
     !opponentThinking &&
+    !watching &&
     !reading &&
     !complete &&
     sideToMove(fen) === userSide
@@ -359,6 +423,60 @@ export function TrainingView() {
   const defenseFamilies = useMemo(() => groupOpenings(defenses), [defenses])
   const openingVariants = openingFamilies.find(item => item.name === openingFamily)?.variants ?? []
   const defenseVariants = defenseFamilies.find(item => item.name === defenseFamily)?.variants ?? []
+
+  const startTask = (task: TrainingTask) => {
+    if (!task.ready) return
+    setActiveKind('course')
+    if (task.kind === 'puzzle') {
+      void startPuzzle(task)
+      return
+    }
+    if (task.kind === 'endgame') {
+      void startEndgame(task)
+      return
+    }
+    loadSession(sessionFromTask(task), true)
+  }
+
+  const startEndgame = async (task: TrainingTask) => {
+    const base = sessionFromTask(task)
+    let uci = task.uci_line
+    const first = uci.split(/\s+/)[0]
+    const applied = first ? tryUci(base.startFen, first) : null
+    if (applied) {
+      try {
+        const analysis = await analyzeFen(applied.fen)
+        uci = [first, ...analysis.pv].join(' ')
+      } catch {
+        uci = task.uci_line
+      }
+    }
+    loadSession(sessionFromTask(task, uci), true)
+    coach.say('The first move is the stored technique move. The following moves are a Stockfish search.')
+  }
+
+  const startPuzzle = async (task: TrainingTask) => {
+    coach.say('Searching the candidate positions for a short mate.')
+    for (const fen of task.puzzle_fens) {
+      try {
+        const analysis = await analyzeFen(playableFen(fen))
+        const mate = analysis.scoreType === 'mate' && analysis.scoreValue >= 1 && analysis.scoreValue <= 5
+        if (!mate) continue
+        const puzzle: TrainingTask = {
+          ...task,
+          start_fen: playableFen(fen),
+          user_color: analysis.side,
+          uci_line: analysis.pv.join(' '),
+        }
+        loadSession(sessionFromTask(puzzle), true)
+        coach.say(`Mate in ${analysis.scoreValue}. Find the continuation.`)
+        return
+      } catch {
+        continue
+      }
+    }
+    coach.say('No mate was found in those positions.')
+  }
 
   const chooseOpening = (name: string) => {
     const lesson = openings.find(item => item.openingName === name)
@@ -625,6 +743,27 @@ export function TrainingView() {
           </div>
         </header>
         <div className="scroll-pane">
+          <article className={`track-card${activeKind === 'course' ? ' active' : ''}`}>
+            <span className="eyebrow">Coach</span>
+            {briefStatus === 'ready' && brief ? (
+              (brief.tasks ?? []).map(task => (
+                <button
+                  key={task.kind}
+                  type="button"
+                  className="btn task-choice"
+                  disabled={!task.ready}
+                  onClick={() => startTask(task)}
+                >
+                  {task.kind === 'endgame' ? endgameTitle(task.title) : task.title}
+                  <span>{task.reason}</span>
+                </button>
+              ))
+            ) : (
+              <span>
+                {briefStatus === 'error' ? 'The coaching brief could not be loaded.' : 'Reading your games…'}
+              </span>
+            )}
+          </article>
           <article
             className={`track-card${activeKind === 'opening' ? ' active' : ''}`}
             onClick={event => {

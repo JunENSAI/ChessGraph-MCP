@@ -33,6 +33,8 @@ export interface LessonSession {
   /** Every opponent move comes from Stockfish. */
   enginePlay: boolean
   missingLine: boolean
+  /** When true, the board plays the whole line before the user repeats it. */
+  watch: boolean
 }
 
 interface OpeningLessonJson {
@@ -57,8 +59,8 @@ function stepsFromMoves(sans: string[]): TrainingStep[] {
   return sans.map(san => ({ san, explanation: BOOK }))
 }
 
-export function lineFromUci(uciLine: string, maxPlies = LESSON_PLIES): TrainingStep[] {
-  const chess = new Chess()
+export function lineFromUci(uciLine: string, maxPlies = LESSON_PLIES, startFen?: string): TrainingStep[] {
+  const chess = startFen ? new Chess(startFen) : new Chess()
   const steps: TrainingStep[] = []
   for (const token of uciLine.split(/[\s,]+/).filter(Boolean)) {
     const applied = tryUci(chess.fen(), token)
@@ -109,6 +111,7 @@ export function sessionFromOpening(lesson: OpeningLesson, userColor: Color): Les
     engineAfter: false,
     enginePlay: false,
     missingLine,
+    watch: false,
   }
 }
 
@@ -136,6 +139,111 @@ export function sessionFromEndgame(lesson: EndgameLesson): LessonSession | null 
     engineAfter: true,
     enginePlay: line.length === 0,
     missingLine: false,
+    watch: false,
+  }
+}
+
+export interface CoachingSplit {
+  fen: string
+  ply: number
+  played_san: string
+  played_uci: string
+  best_uci: string
+  best_san: string
+  times: number
+  average_cp_loss: number
+  mate: boolean
+}
+
+export interface CoachingLine {
+  family: string
+  games: number
+  wins: number
+  draws: number
+  losses: number
+}
+
+export interface TrainingTask {
+  kind: 'opening' | 'defense' | 'endgame' | 'puzzle'
+  title: string
+  reason: string
+  start_fen: string
+  uci_line: string
+  pgn_line: string
+  user_color: Color
+  ready: boolean
+  puzzle_fens: string[]
+}
+
+export interface CoachingBrief {
+  strengths: CoachingLine[]
+  target: (CoachingLine & { splits: CoachingSplit[] }) | null
+  calculation: CoachingSplit[]
+  endgames: string
+  tasks: TrainingTask[]
+}
+
+export function playableFen(fen: string): string {
+  const fields = fen.trim().split(/\s+/)
+  if (fields.length >= 6) return fields.slice(0, 6).join(' ')
+  return `${fields.slice(0, 4).join(' ')} 0 1`
+}
+
+export function courseNote(brief: CoachingBrief): string {
+  const strength = brief.strengths[0]
+  const target = brief.target
+  const split = target?.splits[0]
+  const parts: string[] = []
+  if (strength) parts.push(`${strength.family} is a strength (${strength.wins} wins in ${strength.games} games).`)
+  if (target && split) {
+    const stored = split.mate ? 'a mate' : split.best_san
+    parts.push(`In the ${target.family} you played ${split.played_san} ${split.times} times. Stockfish stored ${stored}.`)
+  } else if (target) {
+    parts.push(`${target.family} is the line to work on. No repeated leaving move is stored.`)
+  } else parts.push('No opening has enough games for a target yet.')
+  return parts.join(' ')
+}
+
+export function splitSession(family: string, split: CoachingSplit): LessonSession {
+  const startFen = playableFen(split.fen)
+  const userColor: Color = sideFromFen(startFen)
+  const stored = split.mate ? 'a mate' : split.best_san
+  return {
+    id: `split:${split.fen}`,
+    title: family,
+    detail: `You played ${split.played_san}. Stockfish stored ${stored}. Play that move from here.`,
+    userColor,
+    startFen,
+    line: [],
+    engineAfter: false,
+    enginePlay: true,
+    missingLine: false,
+    watch: false,
+  }
+}
+
+function sideFromFen(fen: string): Color {
+  return fen.split(/\s+/)[1] === 'b' ? 'black' : 'white'
+}
+
+export function sessionFromTask(task: TrainingTask, uciLine = task.uci_line): LessonSession {
+  const startFen = playableFen(task.start_fen)
+  const line = uciLine
+    ? lineFromUci(uciLine, Math.max(uciLine.split(/\s+/).length, 1), startFen)
+    : task.pgn_line
+      ? lineFromPgn(task.pgn_line)
+      : []
+  return {
+    id: `task:${task.kind}`,
+    title: task.title,
+    detail: task.reason,
+    userColor: task.user_color,
+    startFen,
+    line,
+    engineAfter: false,
+    enginePlay: false,
+    missingLine: line.length === 0,
+    watch: task.kind !== 'puzzle',
   }
 }
 
@@ -151,6 +259,7 @@ export function playSession(userColor: Color): LessonSession {
     engineAfter: false,
     enginePlay: true,
     missingLine: false,
+    watch: false,
   }
 }
 
@@ -175,6 +284,12 @@ export async function loadOpeningLessons(color: Color): Promise<OpeningLesson[]>
     uciLine: lesson.uci_line,
     pgnLine: lesson.pgn_line,
   }))
+}
+
+export async function loadCoachingBrief(): Promise<CoachingBrief> {
+  const response = await fetch('/api/coach/brief')
+  if (!response.ok) throw new Error(await readError(response, `Coaching brief failed (${response.status}).`))
+  return (await response.json()) as CoachingBrief
 }
 
 export async function loadEndgameLessons(): Promise<{ eloTier: string | null; lessons: EndgameLesson[] }> {

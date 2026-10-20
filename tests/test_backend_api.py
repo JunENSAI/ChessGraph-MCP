@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from backend.main import create_app
-from chess_mcp.postgres.models import EndgameLesson, OpeningLesson, PlayerSummary
+from chess_mcp.postgres.models import CoachingBrief, EndgameLesson, OpeningLesson, PlayerSummary
 from chess_mcp.postgres.recap import build_recap
 
 
@@ -137,6 +137,30 @@ def test_games_default_to_the_configured_player(monkeypatch) -> None:
     assert arguments["offset"] == 25
     assert arguments["limit"] == 25
     assert arguments["game_type"] == "rapid"
+
+
+def test_coaching_brief_returns_the_repository_value() -> None:
+    class BriefPostgres(LessonPostgres):
+        def get_coaching_brief(self, player: str):
+            self.calls.append(("brief", {"player": player}))
+            return CoachingBrief(endgames="Endgame type is not stored on games.")
+
+    postgres = BriefPostgres()
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/coach/brief", params={"player": "junior"})
+    assert response.status_code == 200
+    assert response.json()["endgames"] == "Endgame type is not stored on games."
+    assert postgres.calls[-1] == ("brief", {"player": "junior"})
+
+
+def test_coaching_brief_does_not_query_without_a_player(monkeypatch) -> None:
+    postgres = LessonPostgres()
+    monkeypatch.setattr("backend.main.get_chess_username", lambda: "  ")
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/coach/brief")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "CHESS_USERNAME is not set"
+    assert postgres.calls == []
 
 
 def test_missing_graph_position_is_not_found() -> None:

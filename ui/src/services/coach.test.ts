@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   askCoach,
+  isCourseQuestion,
   cachedAnswer,
   CoachUnavailableError,
   coachProse,
@@ -90,6 +91,26 @@ describe('askCoach', () => {
     expect(body.messages[0].content).toContain('limit.value')
     expect(body.messages[0].content).toContain('PLAY:')
     expect(body.messages[0].content).not.toContain('validate_line')
+    expect(body.messages[0].content).not.toContain('get_coaching_brief')
+    expect(isCourseQuestion('Why this move?')).toBe(false)
+  })
+
+  it('sends a course question to the coaching brief before the engine', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ choices: [{ message: { content: 'STRENGTH: Italian Game' } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await askCoach('What should I work on in the London?', context, () => {})
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))
+    const prompt = body.messages[0].content as string
+    expect(prompt).toContain('get_coaching_brief')
+    expect(prompt).toContain('four training tasks')
+    expect(prompt).toContain('reason field')
+    expect(prompt).toContain('analyze_position')
+    expect(prompt).toContain('STRENGTH:')
+    expect(prompt).toContain('TARGET:')
+    expect(prompt).toContain('endgame type is not stored on games')
+    expect(prompt.indexOf('get_coaching_brief')).toBeLessThan(prompt.indexOf('analyze_position'))
   })
 
   it('asks for two sentences and no tools when the move is already played', async () => {

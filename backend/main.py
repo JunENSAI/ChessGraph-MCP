@@ -177,6 +177,14 @@ def create_app(
         )
         return {"elo_tier": tier, "lessons": lessons}
 
+    @app.get("/api/coach/brief")
+    def coaching_brief(
+        player: str | None = None,
+        repo: PostgresRepository = Depends(postgres_repo),
+    ):
+        selected = configured_player(player)
+        return repo.get_coaching_brief(selected)
+
     @app.get("/api/player")
     def player(
         username: str | None = None,
