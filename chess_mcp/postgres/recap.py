@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from chess_mcp.chess import parse_board
 
+from .coaching_common import MIN_DRILL_PLIES, START_FEN, line_plies, opening_family, score_rate
 from .models import CoachingBrief, CoachingLine, CoachingSplit, CoachingTarget, TrainingTask
 
 
@@ -44,7 +45,6 @@ MAX_CALCULATION = 3
 MATE_SENTINEL = 9000
 ENDGAME_NOTE = "Endgame type is not stored on games."
 TASK_PLIES = 12
-START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 DEFENSE_FAMILIES = ("French Defense", "Sicilian Defense", "Caro-Kann Defense")
 SCANDINAVIAN = "Scandinavian Defense"
 TIME_LABELS = {
@@ -104,22 +104,6 @@ def _add(counts: dict[str, int], outcome: str, amount: int) -> None:
     key = {"win": "wins", "draw": "draws", "loss": "losses"}.get(outcome)
     if key is not None:
         counts[key] += amount
-
-
-def opening_family(name: str) -> str:
-    """One display name for an opening and its stored variations.
-
-    London lines stay London System even when the database prefixes Queen's
-    Pawn Game. Other names use the text before the first colon, so
-    Scandinavian Defense and Scandinavian Defense: Main Line are one opening.
-    """
-    text = " ".join(name.split())
-    if "london" in text.lower():
-        return "London System"
-    head, separator, _tail = text.partition(":")
-    if separator:
-        return head.strip()
-    return text
 
 
 def build_recap(
@@ -213,10 +197,7 @@ def build_recap(
 
 
 def _score(counts: dict[str, int]) -> float:
-    games = sum(counts.values())
-    if games == 0:
-        return 0.0
-    return (counts["wins"] + counts["draws"] / 2) / games
+    return score_rate(counts["wins"], counts["draws"], counts["losses"])
 
 
 def _best_san(fen: str, uci: str) -> str:
