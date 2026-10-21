@@ -173,3 +173,12 @@ export async function loadGameMoves(gameId: number): Promise<StoredMove[]> {
   }
   return stored
 }
+
+/** Presentation vocabulary, not evidence. */
+export const CATEGORY_LABELS: Record<GameCategory, string> = {
+  rapid: 'Rapid',
+  blitz: 'Blitz',
+  bullet: 'Bullet',
+  daily: 'Daily',
+  bot: 'Bot',
+}

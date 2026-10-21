@@ -21,7 +21,7 @@ import { ChessBoard } from '../components/ChessBoard'
 import { CoachPanel } from '../components/CoachPanel'
 import { EvalBar } from '../components/EvalBar'
 import { PlayerBar } from '../components/PlayerBar'
-import { CATEGORY_LABELS } from '../data/demo'
+import { CATEGORY_LABELS } from '../data/games'
 import {
   keyMomentFromMoves,
   loadGameMoves,
