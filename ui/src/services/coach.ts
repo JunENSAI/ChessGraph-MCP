@@ -25,6 +25,8 @@ export interface CoachContext {
   summary: string
   /** Set when the board already played a Stockfish move and Hermes should only explain it. */
   played?: PlayedMove
+  /** One-line profile from /api/coach/plan, so answers are framed by the player's own results. */
+  profile?: string
 }
 
 export const PHASE_ORB: Record<CoachPhase, OrbState> = {
@@ -219,6 +221,7 @@ export function buildPrompt(question: string, context: CoachContext): string {
     return [
       `Position (normalized FEN): ${context.fen}`,
       `Context: ${subject} — ${context.summary}`,
+      ...(context.profile ? [`Your profile: ${context.profile}`] : []),
       '',
       question,
       '',
@@ -240,6 +243,7 @@ export function buildPrompt(question: string, context: CoachContext): string {
   return [
     `Position (normalized FEN): ${context.fen}`,
     `Context: ${subject} — ${context.summary}`,
+    ...(context.profile ? [`Your profile: ${context.profile}`] : []),
     '',
     question,
     '',

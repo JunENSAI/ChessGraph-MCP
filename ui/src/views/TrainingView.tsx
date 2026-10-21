@@ -6,7 +6,6 @@ import { CoachPanel } from '../components/CoachPanel'
 import { EvalBar } from '../components/EvalBar'
 import { PlayerBar } from '../components/PlayerBar'
 import {
-  loadCoachingBrief,
   loadEndgameLessons,
   loadOpeningLessons,
   playableFen,
@@ -14,13 +13,13 @@ import {
   sessionFromEndgame,
   sessionFromOpening,
   sessionFromTask,
-  type CoachingBrief,
   type EndgameLesson,
   type LessonSession,
   type OpeningLesson,
   type TrainingTask,
 } from '../data/lessons'
-import { endgameTitle, groupOpenings } from '../data/openings'
+import { endgameTitle, groupOpenings, openingFamilyName } from '../data/openings'
+import { loadTrainingPlan, orderPlan, planSummary, type PlanItem, type TrainingPlan } from '../data/plan'
 import type { Color } from '../data/types'
 import { useChessClock } from '../hooks/useChessClock'
 import { useCoach } from '../hooks/useCoach'
@@ -69,8 +68,8 @@ export function TrainingView() {
   const [endgameId, setEndgameId] = useState('')
   const [playColor, setPlayColor] = useState<Color>('white')
   const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play' | 'course'>('opening')
-  const [brief, setBrief] = useState<CoachingBrief | null>(null)
-  const [briefStatus, setBriefStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [plan, setPlan] = useState<TrainingPlan | null>(null)
+  const [planStatus, setPlanStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [watching, setWatching] = useState(false)
   const [session, setSession] = useState<LessonSession | null>(null)
   const [fen, setFen] = useState(START_FEN)
@@ -115,6 +114,7 @@ export function TrainingView() {
         fen: position,
         summary: title,
         played: { san, color, evalText },
+        profile: plan ? planSummary(plan) : undefined,
       },
       { silent: true },
     )
@@ -277,17 +277,16 @@ export function TrainingView() {
 
   useEffect(() => {
     let active = true
-    setBriefStatus('loading')
-    loadCoachingBrief()
+    loadTrainingPlan()
       .then(next => {
         if (!active) return
-        setBrief(next)
-        setBriefStatus('ready')
+        setPlan(next)
+        setPlanStatus('ready')
       })
       .catch(() => {
         if (!active) return
-        setBrief(null)
-        setBriefStatus('error')
+        setPlan(null)
+        setPlanStatus('error')
       })
     Promise.all([loadOpeningLessons('white'), loadOpeningLessons('black'), loadEndgameLessons()])
       .then(([white, black, endgame]) => {
@@ -424,20 +423,6 @@ export function TrainingView() {
   const openingVariants = openingFamilies.find(item => item.name === openingFamily)?.variants ?? []
   const defenseVariants = defenseFamilies.find(item => item.name === defenseFamily)?.variants ?? []
 
-  const startTask = (task: TrainingTask) => {
-    if (!task.ready) return
-    setActiveKind('course')
-    if (task.kind === 'puzzle') {
-      void startPuzzle(task)
-      return
-    }
-    if (task.kind === 'endgame') {
-      void startEndgame(task)
-      return
-    }
-    loadSession(sessionFromTask(task), true)
-  }
-
   const startEndgame = async (task: TrainingTask) => {
     const base = sessionFromTask(task)
     let uci = task.uci_line
@@ -476,6 +461,53 @@ export function TrainingView() {
       }
     }
     coach.say('No mate was found in those positions.')
+  }
+
+  const taskFromPlanItem = (entry: PlanItem): TrainingTask => ({
+    kind: entry.kind,
+    title: entry.title,
+    reason: entry.reason,
+    start_fen: entry.start_fen,
+    uci_line: entry.uci_line,
+    pgn_line: entry.pgn_line,
+    user_color: entry.user_color,
+    ready: entry.ready,
+    puzzle_fens: entry.puzzle_fens,
+  })
+
+  /** The plan item's reason starts with its family, so the family is the text before the first colon. */
+  const planFamily = (entry: PlanItem) => entry.reason.split(':')[0].trim()
+
+  const startPlanItem = (entry: PlanItem) => {
+    setActiveKind('course')
+    if (entry.kind === 'puzzle') {
+      void startPuzzle(taskFromPlanItem(entry))
+      return
+    }
+    if (entry.kind === 'endgame') {
+      const lesson = endgames.find(
+        item => endgameTitle(item.endgameType) === entry.title || item.endgameType === entry.title,
+      )
+      if (!lesson) {
+        coach.say(`No stored endgame position for ${entry.title}.`)
+        return
+      }
+      void startEndgame({ ...taskFromPlanItem(entry), start_fen: lesson.fenFull, uci_line: lesson.humanMoveUci })
+      return
+    }
+    const family = planFamily(entry).toLowerCase()
+    const lesson = [...openings, ...defenses].find(
+      item => openingFamilyName(item.openingName).family.toLowerCase() === family,
+    )
+    if (lesson) {
+      loadSession(sessionFromOpening(lesson, entry.user_color), true)
+      return
+    }
+    if (!entry.uci_line && !entry.pgn_line) {
+      coach.say(`No stored line for ${planFamily(entry)} yet, so there is nothing to drill there.`)
+      return
+    }
+    loadSession(sessionFromTask(taskFromPlanItem(entry)), true)
   }
 
   const chooseOpening = (name: string) => {
@@ -728,6 +760,7 @@ export function TrainingView() {
               mode: 'training',
               fen: fromFen,
               summary: session ? `${session.title}, ${progress.toLowerCase()}` : 'lesson',
+              profile: plan ? planSummary(plan) : undefined,
             })
             .then(reply => {
               if (reply?.play?.length) void animatePlay(reply.play, fromFen)
@@ -745,23 +778,25 @@ export function TrainingView() {
         <div className="scroll-pane">
           <article className={`track-card${activeKind === 'course' ? ' active' : ''}`}>
             <span className="eyebrow">Coach</span>
-            {briefStatus === 'ready' && brief ? (
-              (brief.tasks ?? []).map(task => (
-                <button
-                  key={task.kind}
-                  type="button"
-                  className="btn task-choice"
-                  disabled={!task.ready}
-                  onClick={() => startTask(task)}
-                >
-                  {task.kind === 'endgame' ? endgameTitle(task.title) : task.title}
-                  <span>{task.reason}</span>
-                </button>
-              ))
+            {planStatus === 'ready' && plan ? (
+              <>
+                <p className="muted small">{planSummary(plan)}</p>
+                {orderPlan(plan.items).map(entry => (
+                  <button
+                    key={`${entry.kind}:${entry.title}`}
+                    type="button"
+                    className="btn task-choice"
+                    disabled={!entry.ready}
+                    onClick={() => startPlanItem(entry)}
+                  >
+                    {entry.title}
+                    <span>{entry.reason}</span>
+                    <span className="muted small">Goal: {entry.goal}</span>
+                  </button>
+                ))}
+              </>
             ) : (
-              <span>
-                {briefStatus === 'error' ? 'The coaching brief could not be loaded.' : 'Reading your games…'}
-              </span>
+              <span>{planStatus === 'error' ? 'The training plan could not be loaded.' : 'Reading your games…'}</span>
             )}
           </article>
           <article
