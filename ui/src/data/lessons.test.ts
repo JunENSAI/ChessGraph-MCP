@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Chess } from 'chess.js'
-import { LESSON_PLIES, lineFromPgn, lineFromUci, sessionFromEndgame, sessionFromOpening } from './lessons'
+import { LESSON_PLIES, drillNote, lineFromPgn, lineFromUci, sessionFromEndgame, sessionFromOpening } from './lessons'
 
 describe('lineFromUci', () => {
   it('stops at 12 plies', () => {
@@ -41,6 +41,14 @@ describe('sessionFromOpening', () => {
     expect(session.missingLine).toBe(true)
     expect(session.line).toEqual([])
     expect(session.detail).toMatch(/No stored theory line/)
+  })
+
+  it('reports the drill length instead of hiding a short line', () => {
+    const session = sessionFromOpening(
+      { openingName: 'X', ecoCode: null, games: 3, uciLine: 'e2e4 e7e5', pgnLine: null },
+      'white',
+    )
+    expect(drillNote(session)).toContain('2 plies')
   })
 })
 
