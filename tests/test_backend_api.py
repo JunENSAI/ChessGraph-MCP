@@ -15,6 +15,9 @@ class FakePostgres:
             [("2000-plus", "blitz", "win", 9)],
         )
 
+    def get_training_plan(self, player: str):
+        return {"items": [], "strengths": [], "notes": []}
+
     def get_game(self, game_id: int):
         return None
 
@@ -168,3 +171,8 @@ def test_missing_graph_position_is_not_found() -> None:
     response = client.get("/api/positions", params={"fen": "8/8/8/8/8/8/8/K7 w - - 0 1"})
     assert response.status_code == 404
     assert "not present" in response.json()["error"]
+
+
+def test_plan_route_returns_the_repository_plan() -> None:
+    client = TestClient(create_app(postgres=FakePostgres()))
+    assert client.get("/api/coach/plan").status_code == 200
