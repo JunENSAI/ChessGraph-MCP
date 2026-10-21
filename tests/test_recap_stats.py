@@ -109,7 +109,7 @@ def test_training_tasks_offer_a_new_opening_and_the_french() -> None:
         theory_rows=[
             ("French Defense: Winawer", "e2e4 e7e6", "1. e4 e6"),
             ("Sicilian Defense", "", ""),
-            ("Italian Game", "e2e4 e7e5 g1f3", "1. e4 e5 2. Nf3"),
+            ("Italian Game", "e2e4 e7e5 g1f3 b8c6 f1b5 a7a6", "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6"),
             ("Bird Opening", "f2f4", "1. f4"),
         ],
         endgame_rows=[
@@ -122,7 +122,7 @@ def test_training_tasks_offer_a_new_opening_and_the_french() -> None:
 
     assert tasks["opening"].title == "Italian Game"
     assert tasks["opening"].ready is True
-    assert tasks["opening"].uci_line == "e2e4 e7e5 g1f3"
+    assert tasks["opening"].uci_line == "e2e4 e7e5 g1f3 b8c6 f1b5 a7a6"
     assert "Bird Opening scores" in tasks["opening"].reason
     assert "7 wins" in tasks["opening"].reason
     assert tasks["defense"].title == "French Defense: Winawer"
@@ -134,3 +134,17 @@ def test_training_tasks_offer_a_new_opening_and_the_french() -> None:
     assert "not stored on games" in tasks["endgame"].reason
     assert tasks["puzzle"].puzzle_fens == ["8/8/8/8/8/8/8/K6k w - -", START]
     assert tasks["puzzle"].uci_line == ""
+
+
+def test_short_opening_line_is_not_ready() -> None:
+    brief = build_coaching_brief(
+        family_rows=[("Bird Opening", "white", "loss", 9), ("Bird Opening", "white", "win", 2)],
+        split_rows=[],
+        calculation_rows=[],
+        theory_rows=[("King's Gambit", "e2e4 e7e5", "")],
+    )
+    opening = next(task for task in brief.tasks if task.kind == "opening")
+
+    assert opening.title == "King's Gambit"
+    assert opening.ready is False
+    assert "2 plies" in opening.reason
