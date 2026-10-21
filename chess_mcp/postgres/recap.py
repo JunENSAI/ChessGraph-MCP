@@ -398,6 +398,10 @@ def _training_tasks(
         family, played, (stored_name, uci, pgn) = candidates[0]
         games = "game" if played == 1 else "games"
         opening_reason = f"{opening_reason} {stored_name} is stored in theory and you have {played} {games} in it."
+        plies = line_plies(uci or pgn)
+        short = bool(uci or pgn) and plies < MIN_DRILL_PLIES
+        if short:
+            opening_reason += f" The stored line has {plies} plies, under the {MIN_DRILL_PLIES} needed to drill it."
         opening = TrainingTask(
             kind="opening",
             title=stored_name,
@@ -406,7 +410,7 @@ def _training_tasks(
             uci_line=uci,
             pgn_line="" if uci else pgn,
             user_color="white",
-            ready=bool(uci or pgn),
+            ready=bool(uci or pgn) and not short,
         )
     else:
         opening = TrainingTask(
@@ -443,15 +447,20 @@ def _training_tasks(
         )
     else:
         family, played, (stored_name, uci, pgn) = defense_choice
+        defense_reason = f"{defense_reason} The drill is {stored_name}, which you have played {played} times."
+        plies = line_plies(uci or pgn)
+        short = bool(uci or pgn) and plies < MIN_DRILL_PLIES
+        if short:
+            defense_reason += f" The stored line has {plies} plies, under the {MIN_DRILL_PLIES} needed to drill it."
         defense = TrainingTask(
             kind="defense",
             title=stored_name,
-            reason=f"{defense_reason} The drill is {stored_name}, which you have played {played} times.",
+            reason=defense_reason,
             start_fen=START_FEN,
             uci_line=uci,
             pgn_line="" if uci else pgn,
             user_color="black",
-            ready=bool(uci or pgn),
+            ready=bool(uci or pgn) and not short,
         )
 
     chosen = min(
