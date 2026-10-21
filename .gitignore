@@ -14,8 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the repository root. This block is for Python packaging
+# artifacts; an unanchored `lib/` also matched ui/src/lib/, which kept the
+# whole UI helper directory (chess/clock/eval/graph/stats) out of git.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
