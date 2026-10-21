@@ -227,3 +227,6 @@ data/my_games
 data/opening_theory
 
 core_ideas/
+
+# Hermes agent workspace: the plan markdown is local, not source.
+.hermes/plans/
