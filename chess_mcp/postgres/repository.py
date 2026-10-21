@@ -37,11 +37,24 @@ from .recap import (
     build_coaching_brief,
     build_recap,
 )
+from .training_plan import TrainingPlan, rank_plan
 
 
 _SET_TIMEOUT = text(
     "SELECT set_config('statement_timeout', :statement_timeout_ms, true)"
 )
+
+# The "did the owner play this move" filter shared by the split and puzzle queries.
+_OWNER = """
+    (
+        lower(g.white_username) = lower(:player)
+        OR lower(g.black_username) = lower(:player)
+    )
+    AND (
+        (g.user_color = 'white' AND m.turn_color = 'w')
+        OR (g.user_color = 'black' AND m.turn_color = 'b')
+    )
+"""
 
 _GAME_SUMMARY_COLUMNS = """
     g.game_id,
@@ -682,20 +695,15 @@ class PostgresRepository:
         ]
         return build_recap(opening_rows, time_rows, clock_rows)
 
-    def get_coaching_brief(self, player: str) -> CoachingBrief:
-        """Strengths, the weakest opening split, and repeated later mistakes."""
-        if not player.strip():
-            raise ValueError("player is required")
-        owner = """
-            (
-                lower(g.white_username) = lower(:player)
-                OR lower(g.black_username) = lower(:player)
-            )
-            AND (
-                (g.user_color = 'white' AND m.turn_color = 'w')
-                OR (g.user_color = 'black' AND m.turn_color = 'b')
-            )
+    def _coaching_rows(self, player: str) -> dict[str, list[tuple]]:
+        """The brief's four row sets, as the tuples ``recap`` and the plan expect.
+
+        Keys: ``family`` ``(opening_name, user_color, outcome, amount)``,
+        ``split`` and ``calculation`` ``(opening_name, fen, ply, san,
+        uci_played, uci_best, times, average_cp_loss)``, ``theory``
+        ``(opening_name, uci_line, pgn_line)``.
         """
+        owner = _OWNER
         family_rows = [
             (row["opening_name"], row["user_color"], row["user_outcome"], int(row["amount"]))
             for row in self._fetch_all(
@@ -761,6 +769,7 @@ class PostgresRepository:
         ]
         calculation_rows = [
             (
+                row["opening_name"],
                 row["fen_before_norm"],
                 int(row["ply_number"]),
                 row["san_move"],
@@ -773,6 +782,7 @@ class PostgresRepository:
                 text(
                     f"""
                     SELECT
+                        min(btrim(g.opening_name)) AS opening_name,
                         m.fen_before_norm,
                         min(m.ply_number) AS ply_number,
                         m.san_move,
@@ -797,24 +807,6 @@ class PostgresRepository:
                     "min_cp_loss": MIN_CALCULATION_LOSS,
                     "min_times": MIN_CALCULATION_TIMES,
                 },
-            )
-        ]
-        puzzle_fens = [
-            str(row["fen_before_norm"])
-            for row in self._fetch_all(
-                text(
-                    f"""
-                    SELECT m.fen_before_norm
-                    FROM game_moves AS m
-                    JOIN games AS g ON g.game_id = m.game_id
-                    WHERE {owner}
-                      AND m.cp_loss IS NOT NULL
-                    GROUP BY m.fen_before_norm
-                    ORDER BY max(m.cp_loss) DESC
-                    LIMIT 4
-                    """
-                ),
-                {"player": player},
             )
         ]
         theory_rows = [
@@ -859,6 +851,60 @@ class PostgresRepository:
                 {},
             )
         )
+        return {
+            "family": family_rows,
+            "split": split_rows,
+            "calculation": calculation_rows,
+            "theory": theory_rows,
+        }
+
+    def _time_rows(self, player: str) -> list[tuple]:
+        """``(game_type, outcome, amount)`` for the player's finished games."""
+        rows = self._fetch_all(
+            text(
+                """
+                SELECT
+                    g.game_type::text AS game_type,
+                    g.user_outcome,
+                    count(*) AS amount
+                FROM games AS g
+                WHERE (
+                    lower(g.white_username) = lower(:player)
+                    OR lower(g.black_username) = lower(:player)
+                )
+                  AND g.user_outcome IN ('win', 'loss', 'draw')
+                GROUP BY 1, 2
+                ORDER BY 1, 2
+                """
+            ),
+            {"player": player},
+        )
+        return [(row["game_type"], row["user_outcome"], int(row["amount"])) for row in rows]
+
+    def get_coaching_brief(self, player: str) -> CoachingBrief:
+        """Strengths, the weakest opening split, and repeated later mistakes."""
+        if not player.strip():
+            raise ValueError("player is required")
+        rows = self._coaching_rows(player)
+        owner = _OWNER
+        puzzle_fens = [
+            str(row["fen_before_norm"])
+            for row in self._fetch_all(
+                text(
+                    f"""
+                    SELECT m.fen_before_norm
+                    FROM game_moves AS m
+                    JOIN games AS g ON g.game_id = m.game_id
+                    WHERE {owner}
+                      AND m.cp_loss IS NOT NULL
+                    GROUP BY m.fen_before_norm
+                    ORDER BY max(m.cp_loss) DESC
+                    LIMIT 4
+                    """
+                ),
+                {"player": player},
+            )
+        ]
         rating_rows = self._fetch_all(
             text(
                 """
@@ -883,12 +929,25 @@ class PostgresRepository:
             for lesson in endgame_lessons
         ]
         return build_coaching_brief(
-            family_rows,
-            split_rows,
-            calculation_rows,
-            theory_rows,
+            rows["family"],
+            rows["split"],
+            [row[1:] for row in rows["calculation"]],
+            rows["theory"],
             endgame_rows,
             puzzle_fens,
+        )
+
+    def get_training_plan(self, player: str) -> TrainingPlan:
+        """Rank drills for one player from the same rows the brief uses."""
+        if not player.strip():
+            raise ValueError("player is required")
+        rows = self._coaching_rows(player)
+        return rank_plan(
+            family_rows=rows["family"],
+            split_rows=rows["split"],
+            calculation_rows=rows["calculation"],
+            theory_rows=rows["theory"],
+            time_rows=self._time_rows(player),
         )
 
 
