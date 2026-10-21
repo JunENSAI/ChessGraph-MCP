@@ -72,6 +72,16 @@ export function lineFromUci(uciLine: string, maxPlies = LESSON_PLIES, startFen?:
   return steps
 }
 
+/** How many plies the drill will actually play, for display. */
+export function drillLength(session: LessonSession): number {
+  return session.line.length
+}
+
+export function drillNote(session: LessonSession): string {
+  if (session.missingLine) return 'No stored line for this drill.'
+  return `${session.line.length} plies. You play ${session.userColor === 'white' ? 'White' : 'Black'}.`
+}
+
 export function lineFromPgn(pgnLine: string, maxPlies = LESSON_PLIES): TrainingStep[] {
   const chess = new Chess()
   const sans: string[] = []

@@ -6,6 +6,7 @@ import { CoachPanel } from '../components/CoachPanel'
 import { EvalBar } from '../components/EvalBar'
 import { PlayerBar } from '../components/PlayerBar'
 import {
+  drillNote,
   loadEndgameLessons,
   loadOpeningLessons,
   playableFen,
@@ -632,6 +633,7 @@ export function TrainingView() {
             <h2 className="panel-title">{session ? session.title : 'Lessons'}</h2>
             <p className="panel-subtitle">
               {progress} · {statusText}
+              {session ? ` · ${drillNote(session)}` : ''}
               {mistakes > 0 ? ` · ${mistakes} retr${mistakes === 1 ? 'y' : 'ies'}` : ''}
             </p>
           </div>
