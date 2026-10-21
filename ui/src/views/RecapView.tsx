@@ -252,7 +252,7 @@ export function RecapView() {
   if (error) {
     return (
       <div className="view recap-view">
-        <h2 className="recap-title">Rating-band recap</h2>
+        <h2 className="recap-title">Home</h2>
         <p className="panel-subtitle">{error}</p>
         <button type="button" onClick={() => setAttempt(current => current + 1)}>
           Try again
@@ -281,7 +281,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
   if (!band) {
     return (
       <div className="view recap-view">
-        <h2 className="recap-title">Rating-band recap</h2>
+        <h2 className="recap-title">Home</h2>
         <p className="panel-subtitle">No games are stored for these rating bands.</p>
       </div>
     )
@@ -299,6 +299,9 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
       <header className="recap-head">
         <div>
           <h2 className="recap-title">Rating-band recap</h2>
+          <p className="panel-subtitle">
+            {payload.gameCount} stored games · win rate and repertoire by rating band. Pick a band to see its charts.
+          </p>
         </div>
         <div className="band-switch" role="tablist" aria-label="Rating band">
           {payload.bands.map(item => (
