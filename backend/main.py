@@ -185,6 +185,14 @@ def create_app(
         selected = configured_player(player)
         return repo.get_coaching_brief(selected)
 
+    @app.get("/api/coach/plan")
+    def coaching_plan(
+        player: str | None = None,
+        repo: PostgresRepository = Depends(postgres_repo),
+    ):
+        selected = configured_player(player)
+        return repo.get_training_plan(selected)
+
     @app.get("/api/player")
     def player(
         username: str | None = None,

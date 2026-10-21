@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   askCoach,
+  buildPrompt,
   isCourseQuestion,
   cachedAnswer,
   CoachUnavailableError,
@@ -186,5 +187,16 @@ describe('askCoach', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ choices: [] })))
 
     await expect(askCoach('plan?', context, () => {})).rejects.toThrow(/empty answer/)
+  })
+})
+
+describe('buildPrompt', () => {
+  it('carries the player profile into the question', () => {
+    const prompt = buildPrompt('What is the plan?', { ...context, profile: 'Start with Caro-Kann: Play 20 games.' })
+    expect(prompt).toContain('Your profile: Start with Caro-Kann: Play 20 games.')
+  })
+
+  it('omits the profile line when there is none', () => {
+    expect(buildPrompt('What is the plan?', context)).not.toContain('Your profile:')
   })
 })
