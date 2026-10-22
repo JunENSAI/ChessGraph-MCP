@@ -65,7 +65,7 @@ flowchart LR
 
     subgraph runtime [Read paths]
         api["FastAPI retrieval"]
-        pgMcp["PostgreSQL MCP: 8 tools"]
+        pgMcp["PostgreSQL MCP: 9 tools"]
         graphMcp["Neo4j MCP: 6 tools"]
         sfMcp["Stockfish MCP: 3 tools"]
         stockfish["Stockfish UCI"]
@@ -101,14 +101,14 @@ flowchart LR
 The ETL layer writes data. The MCP servers and the retrieval API only read.
 They call the same repositories in `chess_mcp/`. MCP tools stay typed and
 bounded for Hermes. The API serves the facts the interface can draw before a
-question is asked, such as the rating-band recap. Hermes explains; it does not
-assemble the page.
+question is asked, such as the rating-band recap and the ranked training plan.
+Hermes explains; it does not assemble the page.
 
 ## What the agent can ask
 
 | Evidence source | Best suited for | MCP capabilities |
 | --- | --- | --- |
-| PostgreSQL | Game selection, longitudinal statistics, move records, openings, endgames | 8 curated tools, paginated move retrieval, statement timeouts |
+| PostgreSQL | Game selection, longitudinal statistics, move records, openings, endgames, ranked coaching briefs | 9 curated tools, paginated move retrieval, statement timeouts |
 | Neo4j | Theory versus personal choices, transpositions, recurring positions, graph context | 6 curated tools, anchored queries, maximum traversal depth |
 | Stockfish | Fresh position analysis, candidate comparison, WDL, legal variations | MultiPV, same-root move comparison, line validation |
 
@@ -121,6 +121,10 @@ Examples:
 - “Do different move orders in my games transpose into this position?”
 
 - “Compare my move with Stockfish's best move using the same search budget.”
+
+- “Which opening family scores worst for me, and what should I drill first?”
+
+- “Which positions keep tempting me into the same wrong move?”
 
 - “Which endgame patterns recur in my losses?”
 
@@ -145,6 +149,32 @@ sequenceDiagram
     SF-->>Hermes: Legal UCI, SAN, and resulting FENs
     Hermes-->>User: Verified explanation and actionable lesson
 ```
+
+## Personalized training
+
+The training view is not a fixed lesson list. Both API endpoints behind it read
+the stored games and rank what to work on next.
+
+`GET /api/coach/brief` returns the material a coach would open with:
+
+- the **strongest** opening families, by score in the stored games;
+- the **target**: the weakest opening family, with its wins, draws and losses;
+- **calculation** positions — repeated spots where the recorded move differs
+  from `best_move_uci`, ranked by frequency and average centipawn loss;
+- the **endgames** field, which states plainly that endgame type is not stored
+  on games rather than guessing one;
+- four **tasks**, each with a reason that quotes the stored record.
+
+`GET /api/coach/plan` returns up to six ranked `PlanItem`s. Each item carries a
+`kind` (`opening`, `defense`, `endgame` or `puzzle`), the `reason` that justifies
+it, a `goal`, a `check_after_games` review point, the line to drill, the player's
+colour, and a `ready` flag.
+
+A drill is only offered when it can actually be drilled: `ready` stays `false`
+until the stored theory line for that family is at least `MIN_DRILL_PLIES` (6)
+plies long, and the reason says how many plies it has. Drilled lines are capped
+at `TASK_PLIES` (12). The interface shows the drill length next to the board, so
+a short line is reported as short instead of silently passed off as a lesson.
 
 ## Design guarantees
 
@@ -253,6 +283,10 @@ value in `.env`. Do not copy it into `AGENTS.md` or the Hermes seeds. Search
 budgets and the other limits are documented in
 [`.env.template`](.env.template).
 
+Both stores must be reachable before the interface or the coaches are useful:
+PostgreSQL on `5432` and Neo4j on `7687`. If Neo4j is down the coach says the
+graph evidence is missing instead of guessing at it.
+
 ### 3. Load data if needed
 
 If PostgreSQL and Neo4j are already populated, skip this step. Otherwise,
@@ -289,8 +323,9 @@ Copy the identity seeds before the first coaching session. Hermes loads
 The coach panel calls Hermes through a Vite proxy. Set `HERMES_API_URL` and
 `HERMES_API_KEY` from [`.env.template`](.env.template). `HERMES_API_KEY` must
 match `API_SERVER_KEY` in `~/.hermes/.env`. The Vite dev and preview servers
-add the bearer header, so the key stays on the server side. Do not expose it
-as a `VITE_` variable.
+add the bearer header and strip the browser's `Origin` and `Referer` headers, so
+the key stays on the server side and the gateway's origin guard does not reject
+the request. Do not expose the key as a `VITE_` variable.
 
 ### 5. Verify
 
@@ -316,10 +351,28 @@ uv run mcp dev chess_mcp/stockfish/server.py
 uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-The UI proxies `/api` to `BACKEND_URL`. Routes cover the rating-band recap,
-game and move reads, opening-file lookup, Neo4j position context, and a
-bounded Stockfish search. See [`backend/README.md`](backend/README.md). The
-Stockfish route starts its own engine on first use. Hermes continues to use
+Fifteen routes serve the interface and the coaching reads:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Liveness check |
+| `GET /api/player` | Player summary: games, results, average ratings, date range |
+| `GET /api/recap` | Rating-band recap: win rate, lines, clocks, results |
+| `GET /api/games` | Filter games by player, type, outcome, ECO, and date |
+| `GET /api/games/{game_id}` | One game's metadata and movetext |
+| `GET /api/games/{game_id}/moves` | Paged moves, clocks, and stored evaluations |
+| `GET /api/lessons/openings` | Opening lessons for a colour |
+| `GET /api/lessons/endgames` | Endgame lessons for the player's rating tier |
+| `GET /api/coach/brief` | Strengths, weakest target, calculation, four tasks |
+| `GET /api/coach/plan` | The ranked training plan |
+| `GET /api/openings` | Opening theory for an exact normalized position |
+| `GET /api/positions` | Neo4j position context and outgoing moves |
+| `POST /api/engine/analyze` | Bounded MultiPV analysis |
+| `POST /api/engine/compare` | One played move against the best move, same root |
+| `POST /api/engine/validate` | Replay a UCI line into legal SAN and FENs |
+
+The UI proxies `/api` to `BACKEND_URL`. See [`backend/README.md`](backend/README.md).
+The Stockfish routes start their own engine on first use. Hermes continues to use
 the separate engine inside the Stockfish MCP server.
 
 ### 7. Run the UI
@@ -331,17 +384,27 @@ npm run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
-Training, My games, and Recap. Recap counts stored games through
-`GET /api/recap`. The favorite line in a rating band is the stored opening
-name with the most games, so a line that was played can still rank behind a
-larger one. Training lessons and the game library in
-[`ui/src/data/demo.ts`](ui/src/data/demo.ts) are still sample content.
+
+- **Home** — the default view. A rating-band recap counted from PostgreSQL
+  through `GET /api/recap`. Pick a band and the charts recompute; each card
+  opens into the chart and table behind it. The favourite line in a band is the
+  stored opening name with the most games, so a line that was played can still
+  rank behind a larger one.
+- **Training** — the ranked plan from `GET /api/coach/plan`, drilled on the
+  board with a hint drawn from your own stored move, and the live coach beside it.
+- **My games** — stored games grouped by time control, with the review jumping
+  to a game's recorded key moment.
+
+Every panel is a live read: the recap, games, lessons, coaching brief, plan, and
+position analysis all come from the retrieval API, and the coach answers through
+the Hermes gateway. There is no sample data in the interface.
 
 Other UI commands:
 
 ```bash
 cd ui
-npm test         # clock rules and legal demo lines
+npm test         # clock rules, statistics, plan ranking, and coach transport
+npm run lint     # oxlint
 npm run build    # type-check and production bundle
 npm run preview  # serve the production bundle
 ```
@@ -360,6 +423,7 @@ See [`ui/README.md`](ui/README.md) for the interface structure and libraries.
 | `get_game_moves` | Page through ordered moves, FENs, clocks, and evaluations |
 | `get_player_summary` | Aggregate results and ratings |
 | `get_blunders` | Find the data owner's or a named player's evaluated mistakes |
+| `get_coaching_brief` | Rank opening families by result and surface repeated mistakes |
 | `find_position_occurrences` | Find games containing an exact normalized FEN |
 | `lookup_opening` | Retrieve opening theory for a position |
 | `lookup_endgame_positions` | Retrieve filtered endgame benchmarks |
@@ -405,7 +469,7 @@ See [`docs/mcp.md`](docs/mcp.md) and the package-specific READMEs under
 ```text
 ChessGraph-MCP/
 ├── chess_mcp/                 modular MCP package
-│   ├── postgres/              relational repositories, models, server
+│   ├── postgres/              relational repositories, recap, training plan, server
 │   ├── neo4j/                 graph repositories, models, server
 │   └── stockfish/             UCI lifecycle, scoring, models, server
 ├── etl/
@@ -413,7 +477,13 @@ ChessGraph-MCP/
 │   ├── neo4j_db/              graph synchronization
 │   └── sql_files/             PostgreSQL schema
 ├── backend/                   FastAPI reads for the UI
-├── ui/                        React coach; recap from the API, lessons still demo
+├── ui/                        React coach, all panels reading the API
+│   └── src/
+│       ├── views/             Home, Training, and My games
+│       ├── data/              API-backed reads plus name and type helpers
+│       ├── lib/               chess rules, clocks, evaluations, graph, stats
+│       ├── components/        board, coach panel, eval bar, cards
+│       └── services/          coach transport and engine calls
 ├── agent/                     Hermes persona, memory seeds, MCP config example
 ├── docs/                      operations and MCP reference
 ├── tests/                     unit and opt-in integration tests
@@ -437,18 +507,22 @@ It currently provides:
 
 - local stdio MCP transport for Hermes;
 - a FastAPI retrieval process for the interface, using the same repositories;
-- read-only runtime tools;
-- existing-data analysis;
+- read-only runtime tools, with no arbitrary query surface;
+- existing-data analysis over the loaded games;
+- ranked coaching briefs and a training plan derived from those games;
 - deterministic validation and typed evidence;
-- a local React interface for training, game review, and rating-band recap.
+- a local React interface for Home, Training, and game review, reading the API
+  rather than carrying sample data.
 
 Committed Hermes seeds live in [`agent/`](agent/) (`SOUL.md`, `MEMORY.md`,
 `USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The coach
 panel calls Hermes through the Vite proxy and answers from the MCP evidence.
-The recap is counted from PostgreSQL. Lesson lines and the game library are
-still demo content. Remote HTTP/OAuth deployment, lesson persistence, and
-automatic verification of every natural-language strategic claim are also
-outside the current scope.
+
+Not yet built: persisting lessons or drilling history back into the stores,
+running the retrieval API as a remote HTTP or OAuth service, and automatically
+verifying every natural-language strategic claim the model produces. The
+training plan ranks what to work on next; it does not yet record whether a drill
+was completed.
 
 ## Documentation
 
