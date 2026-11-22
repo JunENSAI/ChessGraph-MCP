@@ -32,11 +32,12 @@ ChessGraph MCP separates those responsibilities:
 
 - **PostgreSQL remembers** games, move telemetry, openings, endgames, and historical engine evaluations.
 
-- **Neo4j connects** positions, personal moves, theory moves, transpositions, games, and endgame patterns.
+- **Neo4j connects** positions, your moves and your opponents' moves, theory moves, engine best moves, each game's path and milestones (where it left book, where it reached the endgame), mistakes, openings and endgame patterns.
 
 - **The retrieval API serves** those same reads to the interface, without asking the model to fetch the page.
 
-- **Hermes-Agent explains** the combined evidence as a personalized lesson.
+- **Claude explains** the combined evidence as a personalized lesson, through the
+  `chessgraph` Claude Code plugin.
 
 > The design principle is simple: **the engine searches, deterministic code
 > validates, the databases provide context, and the model explains only the
@@ -64,15 +65,15 @@ flowchart LR
     end
 
     subgraph runtime [Read paths]
-        api["FastAPI retrieval"]
+        api["FastAPI retrieval + in-app coach"]
         pgMcp["PostgreSQL MCP: 9 tools"]
-        graphMcp["Neo4j MCP: 6 tools"]
+        graphMcp["Neo4j MCP: 8 tools"]
         sfMcp["Stockfish MCP: 3 tools"]
         stockfish["Stockfish UCI"]
     end
 
     ui["React coach"]
-    host["Hermes-Agent and frontier model"]
+    host["Claude Code + chessgraph plugin"]
     coach["Evidence-backed coaching response"]
 
     pgn --> normalizer
@@ -85,7 +86,8 @@ flowchart LR
     graphSync --> neo4j
 
     ui -->|"page facts"| api
-    ui -->|"questions"| host
+    ui -->|"questions (SSE)"| api
+    api -->|"tool loop"| claudeApi["Claude API"]
     api -->|"repository reads"| postgres
     api -->|"repository reads"| neo4j
     api -->|"bounded search"| stockfish
@@ -100,16 +102,16 @@ flowchart LR
 
 The ETL layer writes data. The MCP servers and the retrieval API only read.
 They call the same repositories in `chess_mcp/`. MCP tools stay typed and
-bounded for Hermes. The API serves the facts the interface can draw before a
+bounded for Claude. The API serves the facts the interface can draw before a
 question is asked, such as the rating-band recap and the ranked training plan.
-Hermes explains; it does not assemble the page.
+Claude explains; it does not assemble the page.
 
 ## What the agent can ask
 
 | Evidence source | Best suited for | MCP capabilities |
 | --- | --- | --- |
 | PostgreSQL | Game selection, longitudinal statistics, move records, openings, endgames, ranked coaching briefs | 9 curated tools, paginated move retrieval, statement timeouts |
-| Neo4j | Theory versus personal choices, transpositions, recurring positions, graph context | 6 curated tools, anchored queries, maximum traversal depth |
+| Neo4j | Theory versus personal choices, transpositions, recurring positions, graph context | 8 curated tools, anchored queries, maximum traversal depth |
 | Stockfish | Fresh position analysis, candidate comparison, WDL, legal variations | MultiPV, same-root move comparison, line validation |
 
 Examples:
@@ -133,21 +135,21 @@ Examples:
 ```mermaid
 sequenceDiagram
     actor User
-    participant Hermes as Hermes-Agent
+    participant Coach as Claude (chess-coach)
     participant PG as PostgreSQL MCP
     participant Graph as Neo4j MCP
     participant SF as Stockfish MCP
 
-    User->>Hermes: Why was this move a mistake?
-    Hermes->>PG: get_game_moves and get_blunders
-    PG-->>Hermes: FEN, played move, CPL, clock, game context
-    Hermes->>Graph: get_position_context and get_position_moves
-    Graph-->>Hermes: Theory, personal choices, recurring patterns
-    Hermes->>SF: compare_move from the same root
-    SF-->>Hermes: Best line, played line, score, WDL, provenance
-    Hermes->>SF: validate_line for any cited continuation
-    SF-->>Hermes: Legal UCI, SAN, and resulting FENs
-    Hermes-->>User: Verified explanation and actionable lesson
+    User->>Coach: Why was this move a mistake?
+    Coach->>PG: get_game_moves and get_blunders
+    PG-->>Coach: FEN, played move, CPL, clock, game context
+    Coach->>Graph: get_position_context and get_position_moves
+    Graph-->>Coach: Theory, personal choices, recurring patterns
+    Coach->>SF: compare_move from the same root
+    SF-->>Coach: Best line, played line, score, WDL, provenance
+    Coach->>SF: validate_line for any cited continuation
+    SF-->>Coach: Legal UCI, SAN, and resulting FENs
+    Coach-->>User: Verified explanation and actionable lesson
 ```
 
 ## Personalized training
@@ -234,7 +236,7 @@ key. Stockfish receives a valid six-field FEN generated from that shared key.
 
 - A local [Stockfish](https://stockfishchess.org/download/) binary
 
-- An MCP host such as [Hermes-Agent](https://github.com/NousResearch/hermes-agent)
+- [Claude Code](https://code.claude.com) for the coaching plugin
 
 ### 1. Install the project
 
@@ -273,13 +275,11 @@ NEO4J_DATABASE=neo4j
 
 STOCKFISH_PATH=/usr/games/stockfish
 
-HERMES_API_URL=http://127.0.0.1:8642/v1
-HERMES_API_KEY=
 BACKEND_URL=http://127.0.0.1:8000
 ```
 
 `CHESS_USERNAME` is the Chess.com account stored in the games. Keep the real
-value in `.env`. Do not copy it into `AGENTS.md` or the Hermes seeds. Search
+value in `.env`. Do not copy it into `CLAUDE.md`, the plugin, or any tracked file. Search
 budgets and the other limits are documented in
 [`.env.template`](.env.template).
 
@@ -295,37 +295,49 @@ create the schemas from [`etl/sql_files/`](etl/sql_files/) and run:
 ```bash
 uv run python etl/postgres_db/postgres_load.py
 uv run python etl/postgres_db/load_stockfish_eval.py
-uv run python etl/neo4j_db/neo4j_load.py
+uv run python etl/neo4j_db/neo4j_load.py --reset   # deletes and reloads the chess labels only
 ```
 
 The loaders mutate or rebuild data; the MCP servers never invoke them.
 
-### 4. Connect Hermes-Agent
+### 4. Install the Claude Code plugin
 
-Merge [`agent/hermes-mcp.example.yaml`](agent/hermes-mcp.example.yaml) into
-`~/.hermes/config.yaml`, then adjust its absolute executable paths.
+The coach, its skills, and the three MCP servers ship as the `chessgraph`
+plugin. This repository is also its marketplace:
 
-Hermes registers tools with a server prefix. For example:
-
-```text
-mcp_chess_postgres_get_blunders
-mcp_chess_neo4j_get_position_moves
-mcp_chess_stockfish_compare_move
+```bash
+claude plugin marketplace add /path/to/ChessGraph-MCP
+claude plugin install chessgraph@chessgraph
 ```
 
-PostgreSQL and Neo4j may serve parallel reads. Stockfish parallel calls remain
-disabled because one persistent UCI process is deliberately serialized.
+On first use, Claude Code asks for `chessgraph_home`, the absolute path of this
+checkout. You can also set it with `/plugin configure chessgraph@chessgraph`.
+The servers start with `uv run --directory <chessgraph_home>`, so they read this
+repository's `.env`. No credential is stored in the plugin.
 
-Copy the identity seeds before the first coaching session. Hermes loads
-`SOUL.md` only from `$HERMES_HOME`, and memory only from
-`$HERMES_HOME/memories/`. See [`agent/README.md`](agent/README.md).
+What you get:
 
-The coach panel calls Hermes through a Vite proxy. Set `HERMES_API_URL` and
-`HERMES_API_KEY` from [`.env.template`](.env.template). `HERMES_API_KEY` must
-match `API_SERVER_KEY` in `~/.hermes/.env`. The Vite dev and preview servers
-add the bearer header and strip the browser's `Origin` and `Referer` headers, so
-the key stays on the server side and the gateway's origin guard does not reject
-the request. Do not expose the key as a `VITE_` variable.
+| Component | Use |
+| --- | --- |
+| `chess-coach` agent | Answers from the tools only, in positional terms |
+| `/chessgraph:explain-position <FEN>` | Evaluation, best move, why, and whether you reached it |
+| `/chessgraph:review-game [id]` | Largest mistakes, same-root comparison, one lesson |
+| `/chessgraph:training-plan` | Strengths, target family, four tasks |
+| `/chessgraph:opening-check [FEN]` | Your moves against theory, with scores |
+| `/chessgraph:status` | Are PostgreSQL, Neo4j and Stockfish up? |
+
+Claude Code names the tools `mcp__plugin_chessgraph_<server>__<tool>`. For
+example:
+
+```text
+mcp__plugin_chessgraph_postgres__get_blunders
+mcp__plugin_chessgraph_neo4j__get_position_moves
+mcp__plugin_chessgraph_stockfish__compare_move
+```
+
+PostgreSQL and Neo4j may serve parallel reads. Stockfish calls stay serialized,
+because one persistent UCI process serves that server. See
+[`docs/plugin.md`](docs/plugin.md).
 
 ### 5. Verify
 
@@ -351,7 +363,7 @@ uv run mcp dev chess_mcp/stockfish/server.py
 uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Fifteen routes serve the interface and the coaching reads:
+Nineteen routes serve the interface, the coaching reads, and the coach:
 
 | Route | Purpose |
 | --- | --- |
@@ -360,20 +372,25 @@ Fifteen routes serve the interface and the coaching reads:
 | `GET /api/recap` | Rating-band recap: win rate, lines, clocks, results |
 | `GET /api/games` | Filter games by player, type, outcome, ECO, and date |
 | `GET /api/games/{game_id}` | One game's metadata and movetext |
-| `GET /api/games/{game_id}/moves` | Paged moves, clocks, and stored evaluations |
+| `GET /api/games/{game_id}/moves` | Paged moves and stored evaluations |
 | `GET /api/lessons/openings` | Opening lessons for a colour |
 | `GET /api/lessons/endgames` | Endgame lessons for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest target, calculation, four tasks |
 | `GET /api/coach/plan` | The ranked training plan |
 | `GET /api/openings` | Opening theory for an exact normalized position |
 | `GET /api/positions` | Neo4j position context and outgoing moves |
+| `GET /api/explorer` | Book, your and your opponents' moves from a position, and your games through it |
 | `POST /api/engine/analyze` | Bounded MultiPV analysis |
 | `POST /api/engine/compare` | One played move against the best move, same root |
 | `POST /api/engine/validate` | Replay a UCI line into legal SAN and FENs |
+| `POST /api/engine/play` | One opponent move at a chosen strength (`UCI_Elo` 1320–3190, or full strength) |
+| `POST /api/coach/chat` | The in-app coach, streamed as server-sent events |
+| `GET /api/coach/status` | Whether the coach runs on Claude or offline |
 
 The UI proxies `/api` to `BACKEND_URL`. See [`backend/README.md`](backend/README.md).
-The Stockfish routes start their own engine on first use. Hermes continues to use
-the separate engine inside the Stockfish MCP server.
+The Stockfish routes start their own engine on first use. `/api/engine/play`
+uses a second process, so a weakened opponent never weakens analysis. The
+Stockfish MCP server keeps a separate engine of its own.
 
 ### 7. Run the UI
 
@@ -383,21 +400,56 @@ npm install
 npm run dev
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Every board view puts the
+board first, sized to the window, with one tabbed panel beside it (below it on
+a phone). The app has three modes:
 
 - **Home** — the default view. A rating-band recap counted from PostgreSQL
   through `GET /api/recap`. Pick a band and the charts recompute; each card
   opens into the chart and table behind it. The favourite line in a band is the
   stored opening name with the most games, so a line that was played can still
   rank behind a larger one.
-- **Training** — the ranked plan from `GET /api/coach/plan`, drilled on the
-  board with a hint drawn from your own stored move, and the live coach beside it.
-- **My games** — stored games grouped by time control, with the review jumping
-  to a game's recorded key moment.
+- **Play & train** — play Stockfish at a chosen strength (matched to your
+  average rating until you pick one) with a real clock, takeback, resign and
+  PGN copy, or drill the ranked plan from `GET /api/coach/plan`. Tabs: Play
+  (new game and lessons), Moves, Coach, Explorer.
+- **My games** — stored games grouped by time control. A game opens at its
+  recorded key moment; the move table marks `?!`, `?` and `??` from stored
+  centipawn loss. Tabs: Games, Moves, Coach, Explorer.
+
+The Explorer tab reads graph v2 through `GET /api/explorer`: book moves, your
+moves and your opponents' moves from the position on the board, with games and
+scores, and your recent games through it. ← → step through moves, Home/End jump,
+F flips the board.
 
 Every panel is a live read: the recap, games, lessons, coaching brief, plan, and
-position analysis all come from the retrieval API, and the coach answers through
-the Hermes gateway. There is no sample data in the interface.
+position analysis all come from the retrieval API. There is no sample data in
+the interface.
+
+### The in-app coach
+
+The coach panel posts to `POST /api/coach/chat`, and the API streams the answer
+back as server-sent events. The UI lights each evidence chip (Games, Graph,
+Stockfish) as the matching tool runs.
+
+The coach has two modes:
+
+- **Claude.** Used when `ANTHROPIC_API_KEY` is set in `.env`.
+  - The API runs a tool loop on the Messages API (`CLAUDE_MODEL`, default
+    `claude-opus-5-5`, with effort `CLAUDE_EFFORT`, default `low`).
+  - It uses fourteen read-only tools that mirror the MCP contracts.
+  - Usernames are replaced by "you" and "opponent" before any tool result
+    leaves the machine.
+  - `CLAUDE_REFUSAL_FALLBACK=default` lets the API retry a refused turn on a
+    fallback model.
+- **Offline evidence.** Used when there is no key, or when `COACH_MODE=offline`
+  is set.
+  - The same tools run in a fixed plan: a position question gets Stockfish plus
+    the graph, a training question gets the coaching brief, and a game question
+    gets the largest mistakes plus a same-root comparison.
+  - The results are printed without a model and labelled as offline.
+
+The key stays in the API process. See [`backend/README.md`](backend/README.md).
 
 Other UI commands:
 
@@ -437,12 +489,14 @@ Resource: `chessgraph://postgres/schema`
 
 | Tool | Purpose |
 | --- | --- |
-| `get_position_context` | Retrieve a position with opening and endgame links |
-| `get_position_moves` | Compare outgoing personal and theory moves |
-| `find_transpositions` | Find bounded paths to convergent graph positions |
-| `get_game_blunders` | Retrieve graph-linked mistakes for one game |
-| `get_recurring_blunder_positions` | Rank repeated mistake positions |
-| `get_endgame_context` | Retrieve endgame patterns and benchmark positions |
+| `get_position_context` | A position with phase, stored eval, openings, endgame type and engine best move |
+| `get_position_moves` | Theory moves and played moves, split into yours and your opponents' |
+| `find_transpositions` | Find bounded paths to positions several move orders reach |
+| `get_game_blunders` | Your mistakes in one game, filtered by severity |
+| `get_recurring_blunder_positions` | Positions where you went wrong in several games |
+| `get_endgame_context` | Endgame patterns and benchmark positions |
+| `get_games_through_position` | Your games that reached a position, and your score from it |
+| `get_theory_exits` | Where your games leave opening theory |
 
 Resource: `chessgraph-neo4j://schema`
 
@@ -479,12 +533,13 @@ ChessGraph-MCP/
 ├── backend/                   FastAPI reads for the UI
 ├── ui/                        React coach, all panels reading the API
 │   └── src/
-│       ├── views/             Home, Training, and My games
+│       ├── views/             Home, Play & train, and My games
 │       ├── data/              API-backed reads plus name and type helpers
 │       ├── lib/               chess rules, clocks, evaluations, graph, stats
 │       ├── components/        board, coach panel, eval bar, cards
 │       └── services/          coach transport and engine calls
-├── agent/                     Hermes persona, memory seeds, MCP config example
+├── plugins/chessgraph/        Claude Code plugin: MCP servers, coach agent, skills
+├── .claude-plugin/            local marketplace manifest
 ├── docs/                      operations and MCP reference
 ├── tests/                     unit and opt-in integration tests
 ├── CHESS.md                   chess-domain reference
@@ -505,18 +560,17 @@ game records may contain usernames and should be treated as private data.
 ChessGraph MCP is a local evidence layer, not a complete coaching application.
 It currently provides:
 
-- local stdio MCP transport for Hermes;
+- local stdio MCP servers, packaged as a Claude Code plugin;
 - a FastAPI retrieval process for the interface, using the same repositories;
 - read-only runtime tools, with no arbitrary query surface;
 - existing-data analysis over the loaded games;
 - ranked coaching briefs and a training plan derived from those games;
 - deterministic validation and typed evidence;
-- a local React interface for Home, Training, and game review, reading the API
+- a local React interface for Home, Play & train, and game review, reading the API
   rather than carrying sample data.
 
-Committed Hermes seeds live in [`agent/`](agent/) (`SOUL.md`, `MEMORY.md`,
-`USER.md`). Project instructions live in [`AGENTS.md`](AGENTS.md). The coach
-panel calls Hermes through the Vite proxy and answers from the MCP evidence.
+The coach persona and skills live in [`plugins/chessgraph/`](plugins/chessgraph/).
+Project instructions for Claude Code live in [`CLAUDE.md`](CLAUDE.md).
 
 Not yet built: persisting lessons or drilling history back into the stores,
 running the retrieval API as a remote HTTP or OAuth service, and automatically
@@ -529,6 +583,8 @@ was completed.
 - [Retrieval API](backend/README.md)
 
 - [Coach interface](ui/README.md)
+
+- [Claude Code plugin](docs/plugin.md)
 
 - [MCP setup, security, and troubleshooting](docs/mcp.md)
 

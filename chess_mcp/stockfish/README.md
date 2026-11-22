@@ -190,8 +190,8 @@ The board and returned variations must support that claim.
 
 ```text
 STOCKFISH_PATH=/usr/games/stockfish
-STOCKFISH_DEFAULT_DEPTH=10
-STOCKFISH_MAX_DEPTH=15
+STOCKFISH_DEFAULT_DEPTH=6
+STOCKFISH_MAX_DEPTH=9
 STOCKFISH_MAX_NODES=5000000
 STOCKFISH_MAX_TIME_MS=30000
 STOCKFISH_MAX_MULTIPV=5
@@ -200,7 +200,7 @@ STOCKFISH_HASH_MB=128
 ```
 
 `STOCKFISH_DEPTH` remains a legacy fallback used when the MCP-specific default
-is absent. Keep Hermes tool timeouts above the maximum allowed engine time.
+is absent. Keep MCP host tool timeouts above the maximum allowed engine time.
 
 ## Extending safely
 

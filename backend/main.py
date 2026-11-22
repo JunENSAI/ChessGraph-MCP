@@ -1,21 +1,26 @@
 """HTTP retrieval API for the coach UI.
 
-Hermes keeps the MCP servers. This process calls the same repositories for
+The MCP servers serve Claude. This process calls the same repositories for
 the facts the interface renders before a question is asked: games, opening
 rows, graph context, and a bounded Stockfish search. It does not explain.
 """
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal
 
+import chess.engine
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from neo4j.exceptions import Neo4jError
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from backend.coach import CoachProvider, CoachRequest, ToolContext, provider_from_settings
+from backend.opponent import MAX_ELO, MAX_MOVETIME_MS, MIN_ELO, MIN_MOVETIME_MS, Opponent
 from chess_mcp.config import get_chess_username, get_neo4j_settings, get_postgres_settings
 from chess_mcp.neo4j.repository import Neo4jRepository
 from chess_mcp.postgres.models import GameType, UserOutcome
@@ -43,11 +48,19 @@ class ValidateRequest(BaseModel):
     moves_uci: list[str]
 
 
+class PlayRequest(BaseModel):
+    fen: str
+    elo: int | None = Field(default=None, ge=MIN_ELO, le=MAX_ELO, description="null plays at full strength")
+    movetime_ms: int = Field(default=300, ge=MIN_MOVETIME_MS, le=MAX_MOVETIME_MS)
+
+
 def create_app(
     *,
     postgres: PostgresRepository | None = None,
     neo4j: Neo4jRepository | None = None,
     stockfish: StockfishService | None = None,
+    coach: CoachProvider | None = None,
+    opponent: Opponent | None = None,
 ) -> FastAPI:
     """Build the API. Injected repositories are for tests and are not closed here."""
 
@@ -65,14 +78,19 @@ def create_app(
                 app.state.neo4j.close()
             if app.state.owns_stockfish and app.state.stockfish is not None:
                 app.state.stockfish.close()
+            if app.state.owns_opponent and app.state.opponent is not None:
+                app.state.opponent.close()
 
     app = FastAPI(title="ChessGraph retrieval", lifespan=lifespan)
     app.state.postgres = postgres
     app.state.neo4j = neo4j
     app.state.stockfish = stockfish
+    app.state.coach = coach
     app.state.owns_postgres = False
     app.state.owns_neo4j = False
     app.state.owns_stockfish = False
+    app.state.opponent = opponent
+    app.state.owns_opponent = False
 
     def postgres_repo(request: Request) -> PostgresRepository:
         return request.app.state.postgres
@@ -193,6 +211,39 @@ def create_app(
         selected = configured_player(player)
         return repo.get_training_plan(selected)
 
+    def coach_provider(request: Request) -> CoachProvider:
+        if request.app.state.coach is None:
+            request.app.state.coach = provider_from_settings()
+        return request.app.state.coach
+
+    @app.get("/api/coach/status")
+    def coach_status(provider: CoachProvider = Depends(coach_provider)):
+        return {"mode": provider.mode, "model": getattr(provider, "model", None)}
+
+    @app.post("/api/coach/chat")
+    def coach_chat(
+        body: CoachRequest,
+        request: Request,
+        provider: CoachProvider = Depends(coach_provider),
+    ):
+        """Stream the coach's answer as server-sent events (see backend/coach/providers.py)."""
+        ctx = ToolContext(
+            postgres=lambda: request.app.state.postgres,
+            neo4j=lambda: neo4j_repo(request),
+            stockfish=lambda: stockfish_service(request),
+            player=configured_player(None),
+        )
+
+        def events():
+            for event in provider.run(body, ctx):
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/api/player")
     def player(
         username: str | None = None,
@@ -223,6 +274,36 @@ def create_app(
             "context": graph.get_position_context(fen),
             "moves": graph.get_position_moves(fen, limit=limit),
         }
+
+    @app.get("/api/explorer")
+    def explorer(
+        fen: str,
+        limit: int = Query(default=30, ge=1, le=50),
+        graph: Neo4jRepository = Depends(neo4j_repo),
+    ):
+        """Moves from a position: book, yours and your opponents', plus your games through it.
+
+        A position missing from the graph is an empty answer, not an error: most
+        positions on a live board were never reached in a stored game.
+        """
+        try:
+            context = graph.get_position_context(fen)
+        except LookupError:
+            context = None
+        moves = graph.get_position_moves(fen, limit=limit)
+        games = graph.get_games_through_position(fen, limit=5)
+        return {"fen_norm": moves.fen_norm, "context": context, "moves": moves.moves, "games": games}
+
+    def opponent_engine(request: Request) -> Opponent:
+        if request.app.state.opponent is None:
+            request.app.state.opponent = Opponent()
+            request.app.state.owns_opponent = True
+        return request.app.state.opponent
+
+    @app.post("/api/engine/play")
+    def play(body: PlayRequest, engine: Opponent = Depends(opponent_engine)):
+        """One opponent move at a chosen strength. Not an analysis: the move may be weak on purpose."""
+        return engine.play(body.fen, body.elo, body.movetime_ms)
 
     @app.post("/api/engine/analyze")
     def analyze(body: AnalyzeRequest, engine: StockfishService = Depends(stockfish_service)):
@@ -257,6 +338,13 @@ def create_app(
         from fastapi.responses import JSONResponse
 
         return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    @app.exception_handler(chess.engine.EngineError)
+    @app.exception_handler(chess.engine.EngineTerminatedError)
+    async def stockfish_down(_request: Request, _exc: Exception):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=503, content={"error": "Stockfish is not available."})
 
     @app.exception_handler(SQLAlchemyError)
     async def postgres_down(_request: Request, _exc: SQLAlchemyError):

@@ -7,17 +7,6 @@ export interface TrainingStep {
   explanation: string
 }
 
-export interface TrainingTrack {
-  id: string
-  kind: 'opening' | 'defense' | 'endgame'
-  title: string
-  subtitle: string
-  userColor: Color
-  startFen?: string
-  /** Full lesson line in SAN; the user plays the moves of `userColor`. */
-  line: TrainingStep[]
-}
-
 export interface KeyMoment {
   ply: number
   played: string
@@ -32,22 +21,6 @@ export interface KeyMoment {
   showEngine?: boolean
 }
 
-export interface LibraryGame {
-  id: string
-  category: GameCategory
-  timeControl: string
-  playedOn: string
-  opponent: string
-  opponentElo: number
-  userElo: number
-  userColor: Color
-  result: Outcome
-  opening: string
-  eco: string
-  moves: string[]
-  keyMoment: KeyMoment
-}
-
 export interface OutcomeCounts {
   wins: number
   draws: number
@@ -58,23 +31,6 @@ export interface OpeningStat {
   name: string
   eco: string
   results: OutcomeCounts
-}
-
-export interface EndgameStat {
-  type: string
-  label: string
-  white: OutcomeCounts
-  black: OutcomeCounts
-}
-
-export interface RatingBand {
-  id: string
-  label: string
-  white: OutcomeCounts
-  black: OutcomeCounts
-  openingsWhite: OpeningStat[]
-  defensesBlack: OpeningStat[]
-  endgames: EndgameStat[]
 }
 
 export interface TimeControlStat {

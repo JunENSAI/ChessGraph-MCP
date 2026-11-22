@@ -201,6 +201,20 @@ def test_validate_line_replays_without_starting_engine(
     assert not engine.started
 
 
+def test_validate_line_rejects_an_illegal_move_with_its_ply(
+    settings: StockfishSettings,
+) -> None:
+    engine = StockfishEngine(
+        settings_getter=lambda: settings,
+        engine_factory=lambda _: FakeEngine(),
+    )
+    service = StockfishService(engine, settings_getter=lambda: settings)
+
+    with pytest.raises(ValueError, match="ply 2"):
+        service.validate_line(chess.STARTING_FEN, ["e2e4", "e2e5"])
+    assert not engine.started
+
+
 @pytest.mark.parametrize(
     ("limit_type", "limit_value", "bounded_value"),
     [

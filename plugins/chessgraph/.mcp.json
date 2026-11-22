@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--directory", "${user_config.chessgraph_home}", "chessgraph-postgres-mcp"]
+    },
+    "neo4j": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--directory", "${user_config.chessgraph_home}", "chessgraph-neo4j-mcp"]
+    },
+    "stockfish": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--directory", "${user_config.chessgraph_home}", "chessgraph-stockfish-mcp"]
+    }
+  }
+}

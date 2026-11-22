@@ -1,0 +1,17 @@
+{
+  "name": "chessgraph",
+  "version": "0.1.0",
+  "description": "Personal chess coach for Claude Code: your games (PostgreSQL), the position graph (Neo4j) and Stockfish as read-only MCP tools, with a coach agent and review, training and opening skills.",
+  "author": {
+    "name": "Junior"
+  },
+  "license": "MIT",
+  "keywords": ["chess", "stockfish", "neo4j", "postgresql", "coaching", "mcp"],
+  "userConfig": {
+    "chessgraph_home": {
+      "type": "directory",
+      "title": "ChessGraph repository",
+      "description": "Absolute path of your ChessGraph-MCP checkout. Its .env holds the database and Stockfish settings; the MCP servers run from there with uv."
+    }
+  }
+}

@@ -72,11 +72,6 @@ export function lineFromUci(uciLine: string, maxPlies = LESSON_PLIES, startFen?:
   return steps
 }
 
-/** How many plies the drill will actually play, for display. */
-export function drillLength(session: LessonSession): number {
-  return session.line.length
-}
-
 export function drillNote(session: LessonSession): string {
   if (session.missingLine) return 'No stored line for this drill.'
   return `${session.line.length} plies. You play ${session.userColor === 'white' ? 'White' : 'Black'}.`
@@ -153,26 +148,6 @@ export function sessionFromEndgame(lesson: EndgameLesson): LessonSession | null 
   }
 }
 
-export interface CoachingSplit {
-  fen: string
-  ply: number
-  played_san: string
-  played_uci: string
-  best_uci: string
-  best_san: string
-  times: number
-  average_cp_loss: number
-  mate: boolean
-}
-
-export interface CoachingLine {
-  family: string
-  games: number
-  wins: number
-  draws: number
-  losses: number
-}
-
 export interface TrainingTask {
   kind: 'opening' | 'defense' | 'endgame' | 'puzzle'
   title: string
@@ -185,55 +160,10 @@ export interface TrainingTask {
   puzzle_fens: string[]
 }
 
-export interface CoachingBrief {
-  strengths: CoachingLine[]
-  target: (CoachingLine & { splits: CoachingSplit[] }) | null
-  calculation: CoachingSplit[]
-  endgames: string
-  tasks: TrainingTask[]
-}
-
 export function playableFen(fen: string): string {
   const fields = fen.trim().split(/\s+/)
   if (fields.length >= 6) return fields.slice(0, 6).join(' ')
   return `${fields.slice(0, 4).join(' ')} 0 1`
-}
-
-export function courseNote(brief: CoachingBrief): string {
-  const strength = brief.strengths[0]
-  const target = brief.target
-  const split = target?.splits[0]
-  const parts: string[] = []
-  if (strength) parts.push(`${strength.family} is a strength (${strength.wins} wins in ${strength.games} games).`)
-  if (target && split) {
-    const stored = split.mate ? 'a mate' : split.best_san
-    parts.push(`In the ${target.family} you played ${split.played_san} ${split.times} times. Stockfish stored ${stored}.`)
-  } else if (target) {
-    parts.push(`${target.family} is the line to work on. No repeated leaving move is stored.`)
-  } else parts.push('No opening has enough games for a target yet.')
-  return parts.join(' ')
-}
-
-export function splitSession(family: string, split: CoachingSplit): LessonSession {
-  const startFen = playableFen(split.fen)
-  const userColor: Color = sideFromFen(startFen)
-  const stored = split.mate ? 'a mate' : split.best_san
-  return {
-    id: `split:${split.fen}`,
-    title: family,
-    detail: `You played ${split.played_san}. Stockfish stored ${stored}. Play that move from here.`,
-    userColor,
-    startFen,
-    line: [],
-    engineAfter: false,
-    enginePlay: true,
-    missingLine: false,
-    watch: false,
-  }
-}
-
-function sideFromFen(fen: string): Color {
-  return fen.split(/\s+/)[1] === 'b' ? 'black' : 'white'
 }
 
 export function sessionFromTask(task: TrainingTask, uciLine = task.uci_line): LessonSession {
@@ -262,7 +192,7 @@ export function playSession(userColor: Color): LessonSession {
   return {
     id: `play:${userColor}`,
     title: `Play as ${side}`,
-    detail: 'Stockfish plays the other side. Reading the explanation does not stop your clock.',
+    detail: 'Stockfish plays the other side at the strength you choose.',
     userColor,
     startFen: new Chess().fen(),
     line: [],
@@ -294,12 +224,6 @@ export async function loadOpeningLessons(color: Color): Promise<OpeningLesson[]>
     uciLine: lesson.uci_line,
     pgnLine: lesson.pgn_line,
   }))
-}
-
-export async function loadCoachingBrief(): Promise<CoachingBrief> {
-  const response = await fetch('/api/coach/brief')
-  if (!response.ok) throw new Error(await readError(response, `Coaching brief failed (${response.status}).`))
-  return (await response.json()) as CoachingBrief
 }
 
 export async function loadEndgameLessons(): Promise<{ eloTier: string | null; lessons: EndgameLesson[] }> {

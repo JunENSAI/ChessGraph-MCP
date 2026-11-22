@@ -1,73 +1,103 @@
 # ChessGraph Coach UI
 
-React interface for the ChessGraph coaching workflow. It currently runs on
-demo data; the data and coach service layers are shaped so the PostgreSQL,
-Neo4j, and Stockfish MCP servers can replace them through Hermes-Agent.
+React interface for the ChessGraph coaching workflow. Every panel reads live
+data from the FastAPI retrieval API in `backend/`. The Vite dev and preview
+servers proxy `/api` to `BACKEND_URL` (default `http://127.0.0.1:8000`). There
+is no demo or sample data in the interface.
 
-The live coach calls the Hermes gateway. The browser posts to the same-origin
-path `/hermes-api/chat/completions`; the Vite dev and preview servers proxy that
-to `HERMES_API_URL` and add the `HERMES_API_KEY` bearer header themselves, so the
-key never reaches the browser or the bundle. It must never be exposed through a
-`VITE_` variable.
+The coach panel posts to `POST /api/coach/chat` and reads the answer as a
+server-sent event stream (`src/services/coach.ts`).
 
-The key must equal `API_SERVER_KEY` in `~/.hermes/.env`, and the gateway must be
-running (`hermes gateway status`) with the API server enabled
-(`platforms.api_server.enabled: true`). `npm run build` emits static files only,
-so a production deployment needs its own reverse proxy for `/hermes-api`.
+- The text appears as it arrives.
+- The Games, Graph and Stockfish chips light up as each tool runs: green when
+  it answered, struck through when it failed.
+- The header says whether Claude or the offline evidence mode answered.
+
+The model key lives only in the API process. Never expose a key through a
+`VITE_` variable. `npm run build` emits static files only, so a
+production deployment needs its own reverse proxy for `/api`.
 
 ## Run
 
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # clock logic and demo-data legality
+npm test         # unit tests: clocks, evals, notation, material, strength, keys, explorer, sounds, coach transport
+npm run lint     # oxlint
 npm run build    # type-check and production bundle
-npm run lint
 ```
 
 ## Modes
 
-**Training** — move-by-move lessons for openings (Italian Game), defenses
-(Caro-Kann), and endgames (Lucena). A lesson accepts only its line, plays the
-partner's reply, and has Hermes explain each step. Free play moves both sides
-and is the quickest way to try every time control.
+**Home** (the default tab) is the rating-band recap from `GET /api/recap`.
 
-Lesson lines and the game library still come from `src/data/demo.ts`. Hermes
-answers questions from the real MCP evidence; the board content around it is
-not yet loaded from PostgreSQL.
+- Pick a band and the charts recompute. Each card opens into the chart and
+  table behind it.
+- Cards cover White lines, Black lines, win rate by colour, and results by
+  time control.
+- The favourite line in a band is the stored opening name with the most games.
+- Endgame types are not stored on games, so the recap does not invent them.
 
-**My games** — games grouped in Rapid, Blitz, Bullet, Daily, and Bot folders
-(bot games carry their time control). Each game opens at its key moment with
-the played move and the Stockfish alternative drawn as arrows, a navigable
-move list, a 3D position graph, and a Hermes review.
+Every board view is **board first**: the board is sized to the window height,
+with player bars (name, rating, clock, captured pieces and material lead), an
+evaluation bar, and one tabbed side panel. On a phone the panel moves under the
+board. ← → step through moves, Home/End jump, F flips. Moves, captures, checks
+and castling make a short WebAudio sound (no audio files); the speaker button
+mutes it and the choice is remembered in this browser.
 
-**Recap** — rating bands from `GET /api/recap`. Vite proxies that path to the
-FastAPI process (`BACKEND_URL`, default `http://127.0.0.1:8000`). The headline
-on each opening card is the stored line with the most games in that band.
-Cards cover White lines, Black lines, win rate by color, and results by time
-control. Endgame types are not stored on the games, so the recap does not
-invent them.
+**Play & train**
+
+- *Play*: a new game against Stockfish with a colour, a strength
+  (`src/lib/strength.ts`, sent to `POST /api/engine/play` as `UCI_Elo`; until
+  you choose, the level closest to your average rating) and a time control.
+  The game runs continuously: no pause after each engine move. Hint, Takeback
+  (your move and the reply), Resign, Copy PGN and Explain last move are one
+  click away. Leaving the view pauses a running clock.
+- *Lessons*: the ranked plan from `GET /api/coach/plan` (openings, defences,
+  endgames, puzzles) plus your most played openings and defences to drill.
+- Tabs: Play, Moves (numbered move table), Coach, Explorer.
+
+**My games** groups stored games into Rapid, Blitz, Bullet, Daily and Bot
+folders. Each game:
+
+- opens at its key moment, the user move with the largest stored centipawn
+  loss, with the played move and the stored Stockfish move as arrows;
+- shows a numbered move table with `?!` (50 cp or more), `?` (100) and `??`
+  (300) from stored centipawn loss, and the mistake count for each side;
+- plays the Stockfish line instead of the key move with *Better move*; the
+  arrows and the table then follow that line until *Back to game*.
+- Tabs: Games, Moves, Coach, Explorer.
+
+**Explorer** (`GET /api/explorer`, Neo4j graph v2) lists the book moves, your
+moves and your opponents' moves from the position on the board, with games,
+score from the mover's side and your average centipawn loss, and your recent
+games through the position (click one to open it). Hovering a row draws its
+move on the board.
 
 ## Chess clock
 
-`src/lib/clock.ts` stores remaining time only at turn boundaries and derives
-the live value from `performance.now()`. Throttled timers or a background tab
-therefore cannot make the clock drift. The first move starts the opponent's
-clock without an increment; later moves credit the increment to the mover;
-reaching zero flags that side and locks the board. `src/lib/clock.test.ts`
-covers these rules.
+`src/lib/clock.ts` keeps the clocks honest:
+
+- It stores remaining time only at turn boundaries and derives the live value
+  from `performance.now()`, so throttled timers or a background tab cannot
+  make it drift.
+- The first move starts the opponent's clock without an increment. Later moves
+  credit the increment to the mover.
+- Reaching zero flags that side and locks the board.
+
+`src/lib/clock.test.ts` covers these rules.
 
 ## Structure
 
 ```text
 src/
 ├── App.tsx               mode switch; views stay mounted to keep state
-├── components/           board, player bars, Hermes panel, 3D graph, stat card
-├── views/                Training, My games, Recap
-├── hooks/                chess clock, coach conversation, element size
-├── lib/                  clock rules, chess.js helpers, graph builder, stats
-├── services/coach.ts     demo Hermes transport (HERMES_API_URL / HERMES_API_KEY later)
-└── data/                 types and demo content
+├── components/           board stage, board, player bars, side panel, move table, explorer, coach panel, stat card
+├── views/                Home (recap), Play & train, My games
+├── hooks/                chess clock, coach conversation, board keys, player profile, element size, position eval
+├── lib/                  clock rules, chess.js helpers, evals, notation, material, strength, keys, explorer rows, sounds, stats
+├── services/             coach transport, Stockfish calls through /api/engine, explorer reads
+└── data/                 API reads (games, lessons, plan, recap) and their types
 ```
 
 ## Libraries
@@ -75,10 +105,9 @@ src/
 | Package | Role |
 | --- | --- |
 | `react-chessboard` + `chess.js` | Board rendering, drag and click moves, legality |
-| `react-force-graph-3d` + `three` + `three-spritetext` | 3D position graph with move labels |
-| `thinking-orbs` | Hermes activity indicator |
+| `thinking-orbs` | Coach activity indicator |
 | `recharts` | Recap charts |
 | `motion` | Mode, folder, and card transitions |
 | `lucide-react` | Icons |
 
-The 3D graph and the recap charts load as separate chunks on first use.
+The recap charts load as a separate chunk on first use. There is no WebGL dependency.

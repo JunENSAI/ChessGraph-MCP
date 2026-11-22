@@ -38,7 +38,7 @@ CREATE TABLE games (
     white_elo        INTEGER,
     black_elo        INTEGER,
     
-    -- Perspective Helper Columns (for CHESS_USERNAME)
+    -- Perspective helper columns, from the CHESS_USERNAME account's side
     user_color       CHAR(5) CHECK (user_color IN ('white', 'black')),
     user_elo         INTEGER,
     opponent_elo     INTEGER,

@@ -2,7 +2,7 @@
 
 ## What this folder provides
 
-This package exposes personal chess history and theory data through eight
+This package exposes personal chess history and theory data through nine
 curated, read-only MCP tools:
 
 - `list_games` filters games by player, game type, user outcome, ECO code, and
@@ -13,6 +13,10 @@ curated, read-only MCP tools:
 - `get_game_moves` pages through move, clock, FEN, and stored evaluation data;
 
 - `get_player_summary` aggregates results and ratings;
+
+- `get_coaching_brief` ranks opening families by score, names the weakest
+  family, lists repeated moves that differ from `best_move_uci`, and returns
+  four training tasks;
 
 - `get_blunders` finds high-centipawn-loss moves;
 

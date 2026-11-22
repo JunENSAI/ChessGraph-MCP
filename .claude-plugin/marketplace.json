@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "chessgraph",
+  "description": "ChessGraph plugins for personal chess coaching in Claude Code.",
+  "owner": {
+    "name": "Junior"
+  },
+  "plugins": [
+    {
+      "name": "chessgraph",
+      "description": "Coach from your own games, the position graph and Stockfish, through read-only MCP tools.",
+      "source": "./plugins/chessgraph",
+      "category": "productivity"
+    }
+  ]
+}

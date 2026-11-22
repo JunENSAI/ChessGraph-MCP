@@ -1,134 +1,139 @@
 # Chess
 
-In my perspective, Chess belongs to those games called : `Strategic & Analytic Game`.
+In my perspective, chess belongs to the family of `strategic and analytic games`.
 
-Chess is a known board game that has $8 \times 8$ dimensions. It's regularly played by two players but it has some variants that can be played by more than $2$ players. In case of two player, there is two sides : **White pieces** and **Black pieces**. In the beginning, each players have $16$ pieces on the board [*if counted distinctly by type, each side have $6$ pieces*]. The player who plays with the white pieces begin the game. So, often strong players who played this games about decade call this `having the initiative on the game`.
+Chess is played on an $8 \times 8$ board. The standard game has two players, though some variants are played by more. The two sides are **White** and **Black**. At the start each side has $16$ pieces: one king, one queen, two rooks, two bishops, two knights and eight pawns, so $6$ distinct piece types. White moves first. That small head start is called the **first-move advantage**. It is not the same thing as the *initiative*, which is the ability to make threats the opponent must answer, and which either side can hold or lose during a game.
 
 ![chessboard](./img/chessboard.png)
 
 ## Chess Pieces
 
-A chess piece move differently from the others, so each pieces have a set of move that they can do. Here are the differents names and their authorized moves [*only a knight can jump over other chess pieces so the move below is according to they haven't no obstruction in their passage*] :
+Each piece moves in its own way. Only the knight can jump over other pieces. Every other piece stops at the first occupied square on its path: it can capture an enemy piece standing there, but it can never move onto or through a square held by its own side. No move is legal if it leaves your own king in check.
 
-- **King** [*notation : K*] : a king can move only one square from the square where he started but in every directions.
+- **King** [*notation: K*]: moves one square in any direction. Once per game it may castle (see Castling below). It may never move to a square attacked by the opponent.
 
     ![king_move](./img/pieces_move/king_move.png)
 
-- **Queen** [*notation : Q*] : a Queen can move everywhere on the chessboard if only if there is no other piece from her side that obstruct the case and the king is not in check [*under attack*].
+- **Queen** [*notation: Q*]: moves any number of squares along a rank, a file or a diagonal, combining the rook and the bishop. Any piece in the way blocks her. She may capture the first enemy piece on her line.
 
     ![queen_move](./img/pieces_move/queen_move.png)
 
-- **Rook** [*notation : R*] : a rook can move forward, backward, left or right as many squares possible. Like the Queen move it can be possible if when you play it the two conditions above are not true.
+- **Rook** [*notation: R*]: moves any number of squares along a rank or a file (forward, backward, left or right), under the same blocking and capture rules as the queen.
 
     ![rook_move](./img/pieces_move/rook_move.png)
 
-- **Bishop** [*notation : B*] : a bishop can move diagonally according to the case color when it was started to be play. The two conditions before need to be false, then it can move freely on the diagonal.
+- **Bishop** [*notation: B*]: moves any number of squares diagonally, under the same rules. A bishop stays on the square colour it starts on for the whole game.
 
     ![bishop_move](./img/pieces_move/bishop_move.png)
 
-- **Knight** [*notation : N*] : a knight can move two squares in one direction then one square to side, forming a L-shape.
+- **Knight** [*notation: N*]: moves two squares in one direction, then one square to the side, forming an L-shape. It jumps over any piece in between.
 
     ![knight_move](./img/pieces_move/knight_move.png)
 
-- **Pawn** [*notation : according to the column&row notation*] : a pawn can move two squares on its first move. Then, only one move forward [if you push a pawn to one square it can't move two square after your move]. Philidor said : **Pawn is the soul of chess game**.
+- **Pawn** [*notation: only the destination square, e.g. `e4`; a capture names the file it left, e.g. `exd5`*]: moves one square straight forward onto an empty square. On its first move it *may* advance two squares if both are empty. It captures one square diagonally forward, never straight ahead. It can also capture *en passant* (see below). A pawn that reaches the last rank must promote to a queen, rook, bishop or knight. Philidor said: **"Pawns are the soul of chess."**
 
     ![pawn_move](./img/pieces_move/pawn_move.png)
 
 
 ## Phase of Chess Game
 
-In a game of chess we can denote three parts that establish through the move of both player :
+A game of chess goes through three phases:
 
-- **Opening** : the opening is where the two players will play a sequence of move that already have been studied. So, these move composed nowadays a sort of knowledge called **Opening theory**. It can be done with very brief or very long sequence of move according to the level of memorization for each side. A GrandMaster can played perfectly more than $20$ moves in a theoric line. A player style can be defined from their opening choices.
+- **Opening**: both players follow sequences that have already been studied. Together these sequences form **opening theory**. A line can be short or long, depending on how much each side has memorised. A grandmaster can play more than $20$ moves of a main theoretical line from memory. A player's style often shows in their opening choices.
 
-- **Middle Game** : when the opening phase is finished the two players will play in the middle game. According to the style chosen by both side this middle game can be **chaotic** or **very stable** position. This phase is about exchanging pieces, positionning them and often preparing the endgame.
+- **Middlegame**: after the opening, the players enter the middlegame. Depending on the styles of both sides, it can be **sharp and tactical** or **quiet and positional**. This phase is about plans, piece placement, attacks and the exchanges that shape the coming endgame.
 
-- **Endgame** : the game enters the endgame phase when a significant number of pieces have been traded off (typically characterized by the absence of queens, or when few pieces remain on the board). In this phase, pawn promotion becomes critical, King activity is paramount, and precision is required to convert an advantage into a win.
+- **Endgame**: the game enters the endgame once most pieces have been traded. There is no single official threshold. Common working definitions are "the queens are off and only a few minor or major pieces remain", or a small total of non-pawn material. In this phase pawn promotion becomes central, the king becomes an active piece, and precision is needed to convert an advantage.
 
 ## Chess Time Controls
 
-In Over-The-Board (OTB) and online chess, clocks are used to limit the time each player has to think and make their moves. There are different categories of time controls depending on how fast the game is played :
+Over-the-board and online, clocks limit the time each player has for their moves. Time controls are written `minutes+increment`, where the increment is in seconds added after each move.
 
-- `Classical` : traditional tournament games where players have hours to think, often with an added amount of time (an increment) after every move to allow for deep calculation in complex positions. In the world championship, the time control is about $2$ hours and have $40$ minutes increment on the $40^{th}$ moves.
+- `Classical`: tournament games with hours per player, usually with an increment or a second time period. The World Championship match uses $120$ minutes for the first $40$ moves, then $30$ more minutes for the rest of the game, with a $30$-second increment from move $41$.
 
-- `Rapid` : each player have less that $30$ minutes. But it has some variant like : $10+0$ [each player have 10 minutes with 0 increment on the clock], $15+10$ [each player have 15 minutes with 10 seconds increment by move],$\ldots$
+- `Rapid`: FIDE rapid gives each player more than $10$ and less than $60$ minutes. Chess.com counts any game with $10$ minutes or more per player (and under one day) as rapid. Common examples are $10+0$ and $15+10$ (15 minutes plus 10 seconds per move).
 
-- `Blitz` : where each player usually has between $3 \leq t < 10$ minutes (for example, $3$ minutes or $5$ minutes per game). There is some variants : $3+0$ [each player have only 3 minutes], $5+0$ [each player have only 5 minute, this is the Title Tuesday format].
+- `Blitz`: on Chess.com, from $3$ to under $10$ minutes per player, for example $3+0$, $3+2$ or $5+0$. FIDE blitz is $10$ minutes or less. **Titled Tuesday**, Chess.com's weekly titled-player event, is played at $3+1$.
 
-- `Bullet` : ultra-fast games where each player has less than $3$ minutes total (for example, $1$ minute or $2$ minutes with $1$ second added per move).
+- `Bullet`: under $3$ minutes per player, for example $1+0$ or $2+1$.
+
+- `Daily`: correspondence chess, with days per move. Chess.com PGN headers write it as `1/86400`, one move per $86400$ seconds.
 
 ## Chess Rules
 
-In official tournament, **FIDE** [Fédération Internationale Des Echecs] has emitted some rules that each players have to respect (https://www.fide.com/FIDE/handbook/LawsOfChess.pdf).
+In official tournaments the **FIDE** (Fédération Internationale des Échecs) Laws of Chess apply (https://handbook.fide.com/chapter/E012023).
 
-But if you want just to play chess for fun on online platform, you need to know some basic rules :
+To play casually online, these basic rules are enough:
 
-- The game of chess is played between two opponents who move their pieces alternately on a square board called a `chessboard`. The player with the white pieces commences the game.
+- The game is played between two opponents who move their pieces alternately on a square board called a `chessboard`. The player with the white pieces starts.
 
-- The objective of each player is to place the opponent’s king `under attack` in such a way that the opponent has no legal move. The player who achieves this goal is said to have `checkmated` the opponent’s king and to have won the game. Leaving one’s own king under attack, exposing one’s own king to attack and also `capturing` the opponent’s king are not allowed. The opponent whose king has been checkmated has lost the game.
+- Each player tries to place the opponent's king `under attack` so that the opponent has no legal move. That is `checkmate`, and it wins the game. You may not leave or place your own king under attack, and the king is never captured.
 
-- It is not permitted to move a piece to a square occupied by a piece of the same colour. If a piece moves to a square occupied by an opponent’s piece the latter is captured and removed from the chessboard as part of the same move. A piece is said to attack an opponent’s piece if the piece could make a capture on that square
+- A piece may not move to a square occupied by a piece of its own colour. If a piece moves to a square occupied by an opponent's piece, that piece is captured and removed as part of the same move. A piece attacks a square if it could capture on that square.
 
-- The game is won by the player who has checkmated his opponent’s king. This immediately ends the game, provided that the move producing the checkmate position was a legal move.The game is won by the player whose opponent declares he resigns. This immediately ends the game
+- The game is won by checkmate, which ends it immediately provided the mating move was legal. It is also won when the opponent resigns or runs out of time (if the winner still has mating material). It is drawn by stalemate, agreement, threefold repetition, the fifty-move rule, or insufficient material.
 
 
 ## Buzzwords
 
-Chess has some vocabs has its own specific vocabulary :
+Chess has its own vocabulary:
 
-- **Checkmate** : a situation where the king is under attack [opponent pieces atatcked the square where the king was] and it has no legal move [all the square that he can move are controlled by one or more pieces]. This is the **graal** because when you mate the king, you win the game. But there is a warning : `When you come at the king, you best not miss`. 
+- **Checkmate**: the king is in check (attacked) and the side to move has **no legal move** to escape. There are three ways out of check, and none works here: moving the king, capturing the checking piece, or blocking the line of attack. Checkmate wins the game immediately. As the saying goes: `When you come at the king, you best not miss`.
 
     ![Checkmate](./img/img_buzzword/checkmate.png)
 
-- **Stalemate** : a draw that happens when a player whose turn it is to move has no legal moves left, and their king is not in check.
+- **Stalemate**: a draw. The player to move has no legal move, and their king is not in check.
 
     ![Stalemate](./img/img_buzzword/stalemate.png)
 
-- **Castling** : This is a move of the king and either rook of the same colour along the player’s first rank, counting as a single move of the king and executed as follows : the king is transferred from its original square two squares towards the rook on its original square, then that rook is transferred to the square the king has
-just crossed.
+- **Castling**: a move of the king and one rook of the same colour along the first rank, counted as a single king move. The king moves two squares towards the rook, then the rook jumps to the square the king just crossed. Castling is not allowed if the king or that rook has already moved, if a square between them is occupied, if the king is in check, or if the king would pass through or land on an attacked square.
 
     ![Castling](./img/img_buzzword/castling.gif)
 
-- **Zugzwang** : a situation where any move you make will make your position worse, because you are forced to play even when you don't want to.
+- **Zugzwang**: a position where any move you make worsens your position, but you must move because passing is not allowed.
 
-- **En passant** : a special pawn capture rule in chess where a pawn captures an enemy pawn that has just moved two squares forward from its starting position.
+- **En passant**: when a pawn advances two squares and lands beside an enemy pawn, that enemy pawn may capture it as if it had moved only one square. This is allowed only on the very next move.
 
     ![En passant](./img/pieces_move/en_passant.gif)
 
-- **Pin** : when a piece cannot move because it would expose a more valuable piece (like the King or Queen) behind it to an attack.
+- **Pin**: a piece is pinned when moving it would expose a more valuable piece behind it.
+    - An **absolute pin** is a pin against the king. The pinned piece cannot legally leave the line.
+    - A **relative pin** is a pin against anything else, such as the queen. Moving the pinned piece is legal, just usually costly.
 
     ![Pin](./img/img_buzzword/pin.png)
 
-- **Fianchetto** : developing a bishop to the long diagonal by moving the knight's pawn forward one square.
+- **Fianchetto**: developing a bishop to the long diagonal by advancing the knight's pawn one square (g3/b3 for White, g6/b6 for Black).
 
     ![Fianchetto](./img/img_buzzword/fianchetto.png)
 
-- **Fork** : when one piece (often a knight or pawn) attacks two or more enemy pieces at the same time. The most dangerous one is the royal fork, it's when a knight or a protected pawn attacked simultaneously the king and queen [so the player who attacked can win a queen].
+- **Fork**: one piece, often a knight or a pawn, attacks two or more enemy pieces at once. A **royal fork** is a knight attacking the king and the queen together. The king must move, and the queen falls.
 
     ![Royal Fork](./img/img_buzzword/royal_fork.png)
 
-- **Gambit** : an opening where a player sacrifices a pawn or piece early in the game to get a faster attack or a better position. On late $2020$ was released the  **Queen Gambit, Netflix series**, which is make a reference on a known opening that sacrified temporarily the pawn in `c4`.
+- **Gambit**: an opening where a player offers material, usually a pawn, for faster development, the centre or an attack.
+    - The **Queen's Gambit** (1.d4 d5 2.c4) offers the c4 pawn. Black usually cannot keep it, so it is a gambit in name only.
+    - The Netflix series **The Queen's Gambit** (October $2020$) is named after it.
 
     ![Queen Gambit](./img/img_buzzword/queen_gambit.png)
 
 ## Player Type
 
-Chess players can be described by their preferred way of solving positions. These labels are useful for analysis and training, but they are **descriptive tendencies rather than formal, mutually exclusive categories**. A player may be positional in quiet positions, tactical when combinations appear, and defensive when under pressure.
+Chess players can be described by the way they prefer to solve positions. These labels help with analysis and training, but they describe **tendencies, not formal or exclusive categories**. A player may be positional in quiet positions, tactical when combinations appear, and defensive under pressure.
 
-There is many player style out there but we only focus on these two examples :
+There are many playing styles; we focus on two:
 
-- **Positional Player** : A positional player aims to build and exploit long-term advantages, often without needing an immediate tactical win.
+- **Positional Player**: builds and exploits long-term advantages, often without needing an immediate tactical win.
 
-    - **Main focus** : Pawn structure, weak squares, piece activity, space, outposts, and long-term targets.
+    - **Main focus**: pawn structure, weak squares, piece activity, space, outposts, and long-term targets.
 
-    - **Approach** : Improve the least active piece, restrict the opponent, create weaknesses, and increase pressure gradually.
+    - **Approach**: improve the least active piece, restrict the opponent, create weaknesses, and increase pressure gradually.
 
-    - **Strengths** : Strategic planning, prophylaxis, maneuvering, and converting small advantages.
+    - **Strengths**: strategic planning, prophylaxis, maneuvering, and converting small advantages.
 
-- **Tactical Player** : A tactical player is especially alert to concrete sequences that can change the evaluation of a position quickly.
+- **Tactical Player**: especially alert to concrete sequences that can change the evaluation quickly.
 
-    - **Main focus** : Forcing moves, combinations, forks, pins, skewers, discovered attacks, deflections, and sacrifices.
+    - **Main focus**: forcing moves, combinations, forks, pins, skewers, discovered attacks, deflections, and sacrifices.
 
-    - **Typical approach** : Calculate checks, captures, and threats; compare candidate lines; and look for tactical vulnerabilities.
+    - **Typical approach**: calculate checks, captures, and threats; compare candidate lines; look for tactical vulnerabilities.
 
-    - **Strengths** : Calculation, tactical awareness, and exploiting inaccuracies.
+    - **Strengths**: calculation, tactical awareness, and exploiting inaccuracies.

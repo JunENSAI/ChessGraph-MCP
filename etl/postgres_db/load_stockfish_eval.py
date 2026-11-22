@@ -1,148 +1,194 @@
+"""Backfill Stockfish evaluations for stored moves that have none.
+
+For every game with at least one unevaluated move, the stored UCI moves are
+replayed from the start position. Each position is searched once at
+``STOCKFISH_DEPTH``. The score of position *n + 1* is the "after" score of
+move *n*, so a game of N plies costs N + 1 searches, not 2N.
+
+Stored values keep the original convention:
+
+- ``eval_cp_before`` and ``eval_cp_after`` are from the **mover's** point of
+  view, so ``eval_cp_before`` is from the side to move at ``fen_before_norm``;
+- mate scores are flattened to +/-10000;
+- ``cp_loss = max(0, eval_cp_before - eval_cp_after)``;
+- ``best_move_uci`` is the first move of the principal variation before the move.
+
+A game whose stored moves cannot be replayed is logged and skipped for the
+rest of the run, so it can never be selected again in an endless loop. Each
+game is written in one transaction.
+"""
+
+from __future__ import annotations
+
 import logging
-import os
-import sys
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import chess
 import chess.engine
-from dotenv import find_dotenv, load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
+from sqlalchemy.engine import Engine
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from chess_mcp.config import get_int_setting, get_setting, postgres_url
 
-load_dotenv(find_dotenv(usecwd=True) or find_dotenv())
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
 logger = logging.getLogger("load_stockfish_eval")
 
-DB_USER = os.getenv("POSTGRES_USER", "user_name")
-DB_PASS = os.getenv("POSTGRES_PASSWORD", "user_password")
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "db_name")
-
-DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "/usr/games/stockfish")
-SEARCH_DEPTH = int(os.getenv("STOCKFISH_DEPTH", "15"))
+STOCKFISH_PATH = get_setting("STOCKFISH_PATH", "/usr/games/stockfish")
+SEARCH_DEPTH = get_int_setting("STOCKFISH_DEPTH", 10)
 BATCH_SIZE = 50
+MATE_SCORE = 10_000
+
+# (score from White's point of view, best move in UCI or None) for one position.
+Searcher = Callable[[chess.Board], tuple[int | None, str | None]]
 
 
-def evaluate_all_games(engine_conn, stockfish_binary: str, depth: int) -> int:
-    """Iterate through all unevaluated games in batches until complete."""
-    if not Path(stockfish_binary).exists():
-        logger.error("Stockfish binary not found at %s", stockfish_binary)
-        return 0
+@dataclass(frozen=True)
+class MoveEval:
+    ply_number: int
+    eval_before: int | None
+    eval_after: int | None
+    cp_loss: int | None
+    best_move: str | None
 
-    logger.info("Initializing Stockfish from %s (Depth: %d)", stockfish_binary, depth)
 
-    try:
-        sf_engine = chess.engine.SimpleEngine.popen_uci(stockfish_binary)
-    except Exception as e:
-        logger.error("Failed to start Stockfish process: %s", e)
-        return 0
+class ReplayError(ValueError):
+    """The stored moves of a game are not legal from the start position."""
 
-    fetch_query = text(
-        """
-        SELECT DISTINCT g.game_id, g.pgn_moves_raw
-        FROM games g
-        JOIN game_moves m ON g.game_id = m.game_id
-        WHERE m.eval_cp_before IS NULL
-        LIMIT :batch_size;
+
+def evaluate_moves(moves_uci: Sequence[str], search: Searcher) -> list[MoveEval]:
+    """Evaluate one game's moves in order. Raises ReplayError on an illegal move."""
+    board = chess.Board()
+    positions: list[tuple[int | None, str | None]] = [search(board)]
+    for ply, token in enumerate(moves_uci, start=1):
+        try:
+            move = chess.Move.from_uci(token)
+        except ValueError as exc:
+            raise ReplayError(f"ply {ply}: invalid UCI {token!r}") from exc
+        if move not in board.legal_moves:
+            raise ReplayError(f"ply {ply}: illegal move {token}")
+        board.push(move)
+        positions.append(search(board))
+
+    results: list[MoveEval] = []
+    for ply in range(1, len(moves_uci) + 1):
+        white_before, best = positions[ply - 1]
+        white_after, _ = positions[ply]
+        # Odd plies are White's moves, even plies Black's.
+        sign = 1 if ply % 2 == 1 else -1
+        before = None if white_before is None else sign * white_before
+        after = None if white_after is None else sign * white_after
+        loss = None if before is None or after is None else max(0, before - after)
+        results.append(MoveEval(ply, before, after, loss, best))
+    return results
+
+
+def stockfish_searcher(engine: chess.engine.SimpleEngine, depth: int) -> Searcher:
+    def search(board: chess.Board) -> tuple[int | None, str | None]:
+        if board.is_game_over():
+            outcome = board.outcome()
+            if outcome is not None and outcome.winner is not None:
+                return (MATE_SCORE if outcome.winner == chess.WHITE else -MATE_SCORE), None
+            return 0, None
+        info = engine.analyse(board, chess.engine.Limit(depth=depth))
+        score = info["score"].white().score(mate_score=MATE_SCORE)
+        pv = info.get("pv")
+        return score, (pv[0].uci() if pv else None)
+
+    return search
+
+
+FETCH_GAMES = text(
     """
-    )
-
-    update_move_sql = text(
-        """
-        UPDATE game_moves
-        SET eval_cp_before = :eval_before,
-            eval_cp_after = :eval_after,
-            cp_loss = :cp_loss,
-            best_move_uci = :best_move
-        WHERE game_id = :game_id AND ply_number = :ply_number;
+    SELECT DISTINCT game_id
+    FROM game_moves
+    WHERE eval_cp_before IS NULL
+      AND game_id NOT IN :skipped
+    ORDER BY game_id
+    LIMIT :batch_size
     """
-    )
+).bindparams(bindparam("skipped", expanding=True))
 
-    total_evaluated_moves = 0
-    batch_count = 0
+FETCH_MOVES = text(
+    "SELECT ply_number, uci_move FROM game_moves WHERE game_id = :game_id ORDER BY ply_number"
+)
 
+UPDATE_MOVE = text(
+    """
+    UPDATE game_moves
+    SET eval_cp_before = :eval_before,
+        eval_cp_after = :eval_after,
+        cp_loss = :cp_loss,
+        best_move_uci = :best_move
+    WHERE game_id = :game_id AND ply_number = :ply_number
+    """
+)
+
+
+def evaluate_all_games(db: Engine, search: Searcher, batch_size: int = BATCH_SIZE) -> tuple[int, list[int]]:
+    """Evaluate every game that has unevaluated moves. Returns (moves written, skipped game ids)."""
+    skipped: list[int] = []
+    written = 0
     while True:
-        with engine_conn.begin() as conn:
-            games_batch = conn.execute(
-                fetch_query, {"batch_size": BATCH_SIZE}
-            ).fetchall()
-
-        if not games_batch:
-            break
-
-        batch_count += 1
-        logger.info("Processing batch %d (%d games)...", batch_count, len(games_batch))
-
-        for game_id, pgn_moves_raw in games_batch:
-            board = chess.Board()
-            move_tokens = [
-                token
-                for token in pgn_moves_raw.split()
-                if not token.endswith(".")
-                and token not in ("1-0", "0-1", "1/2-1/2", "*")
+        with db.connect() as conn:
+            # An empty expanding list renders invalid SQL, so pad with an impossible id.
+            game_ids = [
+                row[0]
+                for row in conn.execute(FETCH_GAMES, {"skipped": skipped or [-1], "batch_size": batch_size})
             ]
-
-            ply = 0
-            game_moves_updated = 0
-
-            for san_token in move_tokens:
-                try:
-                    move = board.parse_san(san_token)
-                except ValueError:
-                    break
-
-                ply += 1
-
-                info_before = sf_engine.analyse(board, chess.engine.Limit(depth=depth))
-                score_before = info_before["score"].white().score(mate_score=10000)
-                best_move = info_before.get("pv")
-                best_move_uci = best_move[0].uci() if best_move else None
-
-                board.push(move)
-                info_after = sf_engine.analyse(board, chess.engine.Limit(depth=depth))
-                score_after = info_after["score"].white().score(mate_score=10000)
-
-                if board.turn == chess.BLACK:
-                    cp_loss = max(0, score_before - score_after)
-                    eval_cp_b = score_before
-                    eval_cp_a = score_after
-                else:
-                    cp_loss = max(0, score_after - score_before)
-                    eval_cp_b = -score_before if score_before is not None else None
-                    eval_cp_a = -score_after if score_after is not None else None
-
-                with engine_conn.begin() as conn:
-                    conn.execute(
-                        update_move_sql,
+        if not game_ids:
+            return written, skipped
+        for game_id in game_ids:
+            with db.connect() as conn:
+                rows = conn.execute(FETCH_MOVES, {"game_id": game_id}).all()
+            plies = [row[0] for row in rows]
+            if plies != list(range(1, len(plies) + 1)):
+                logger.warning("game %s: ply numbers are not contiguous; skipped", game_id)
+                skipped.append(game_id)
+                continue
+            try:
+                evals = evaluate_moves([row[1] for row in rows], search)
+            except ReplayError as exc:
+                logger.warning("game %s: %s; skipped", game_id, exc)
+                skipped.append(game_id)
+                continue
+            with db.begin() as conn:
+                conn.execute(
+                    UPDATE_MOVE,
+                    [
                         {
                             "game_id": game_id,
-                            "ply_number": ply,
-                            "eval_before": eval_cp_b,
-                            "eval_after": eval_cp_a,
-                            "cp_loss": cp_loss,
-                            "best_move": best_move_uci,
-                        },
-                    )
-                game_moves_updated += 1
+                            "ply_number": item.ply_number,
+                            "eval_before": item.eval_before,
+                            "eval_after": item.eval_after,
+                            "cp_loss": item.cp_loss,
+                            "best_move": item.best_move,
+                        }
+                        for item in evals
+                    ],
+                )
+            written += len(evals)
+            logger.info("game %s: %d moves evaluated", game_id, len(evals))
 
-            total_evaluated_moves += game_moves_updated
-            logger.info("Evaluated game_id %s (%d moves)", game_id, game_moves_updated)
 
-    sf_engine.quit()
-    logger.info("Evaluation complete! Total moves evaluated: %d", total_evaluated_moves)
-    return total_evaluated_moves
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    )
+    if not Path(STOCKFISH_PATH).exists():
+        logger.error("Stockfish binary not found at %s", STOCKFISH_PATH)
+        return 1
+    db = create_engine(postgres_url())
+    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+    try:
+        written, skipped = evaluate_all_games(db, stockfish_searcher(engine, SEARCH_DEPTH))
+    finally:
+        engine.quit()
+        db.dispose()
+    logger.info("Done: %d moves evaluated, %d games skipped %s", written, len(skipped), skipped[:20])
+    return 0
 
 
 if __name__ == "__main__":
-    engine = create_engine(DATABASE_URL)
-    evaluate_all_games(
-        engine_conn=engine, stockfish_binary=STOCKFISH_PATH, depth=SEARCH_DEPTH
-    )
+    raise SystemExit(main())
