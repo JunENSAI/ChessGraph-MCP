@@ -80,3 +80,15 @@ def test_neo4j_graph_v2_tools_answer_from_the_loaded_graph() -> None:
         assert repository.get_recurring_blunder_positions(limit=3).positions
     finally:
         repository.close()
+
+
+def test_opponent_plays_a_legal_move_at_limited_strength() -> None:
+    from backend.opponent import Opponent
+
+    opponent = Opponent()
+    try:
+        played = opponent.play(chess.STARTING_FEN, elo=1320, movetime_ms=100)
+        assert chess.Move.from_uci(played.uci) in chess.Board().legal_moves
+        assert played.elo == 1320
+    finally:
+        opponent.close()

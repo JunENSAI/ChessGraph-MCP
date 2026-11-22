@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Chessboard, type Arrow } from 'react-chessboard'
 import type { Square } from 'chess.js'
-import { isPromotion, legalTargets, sideToMove, type Promotion } from '../lib/chess'
+import { checkedKingSquare, isPromotion, legalTargets, sideToMove, type Promotion } from '../lib/chess'
 
 export interface BoardMove {
   from: Square
@@ -25,6 +25,9 @@ const TARGET: CSSProperties = {
 }
 const CAPTURE: CSSProperties = {
   background: 'radial-gradient(circle, transparent 58%, rgba(17, 21, 13, 0.32) 60%)',
+}
+const CHECK: CSSProperties = {
+  background: 'radial-gradient(circle, rgba(255, 64, 48, 0.95) 0%, rgba(231, 36, 24, 0.55) 45%, transparent 75%)',
 }
 
 export function ChessBoard({ id, fen, orientation, interactive, onMove, lastMove, arrows = [] }: ChessBoardProps) {
@@ -52,18 +55,21 @@ export function ChessBoard({ id, fen, orientation, interactive, onMove, lastMove
     return squares
   }, [fen])
 
+  const checked = useMemo(() => checkedKingSquare(fen), [fen])
+
   const squareStyles = useMemo(() => {
     const styles: Record<string, CSSProperties> = {}
     if (lastMove) {
       styles[lastMove.from] = LAST_MOVE
       styles[lastMove.to] = LAST_MOVE
     }
+    if (checked) styles[checked] = { ...styles[checked], ...CHECK }
     if (selected) styles[selected] = SELECTED
     targets.forEach(square => {
       styles[square] = occupied.has(square) ? CAPTURE : TARGET
     })
     return styles
-  }, [lastMove, selected, targets, occupied])
+  }, [lastMove, selected, targets, occupied, checked])
 
   const attempt = (from: Square, to: Square, piece?: Promotion) => {
     setSelection(null)
@@ -93,6 +99,9 @@ export function ChessBoard({ id, fen, orientation, interactive, onMove, lastMove
         allowDragging: interactive,
         animationDurationInMs: 180,
         arrows,
+        // Right-click drag draws your own arrows; they clear when the position changes.
+        allowDrawingArrows: true,
+        clearArrowsOnPositionChange: true,
         squareStyles,
         boardStyle: { borderRadius: 8, overflow: 'hidden', boxShadow: '0 14px 34px rgba(0,0,0,.35)' },
         darkSquareStyle: { backgroundColor: '#b58863' },

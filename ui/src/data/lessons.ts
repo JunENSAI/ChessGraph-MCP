@@ -192,7 +192,7 @@ export function playSession(userColor: Color): LessonSession {
   return {
     id: `play:${userColor}`,
     title: `Play as ${side}`,
-    detail: 'Stockfish plays the other side. Reading the explanation does not stop your clock.',
+    detail: 'Stockfish plays the other side at the strength you choose.',
     userColor,
     startFen: new Chess().fen(),
     line: [],

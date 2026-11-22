@@ -101,3 +101,44 @@ export function analyzeFen(fen: string, budget: SearchBudget = {}): Promise<Engi
 
 /** Short search used by the evaluation bar so the number tracks the position. */
 export const BAR_BUDGET: SearchBudget = { limitType: 'time', limitValue: 250 }
+
+export interface EngineMove {
+  uci: string
+  san: string
+  fen: string
+  /** Score of the searched position from the side that moved, before its move. */
+  scoreType: 'cp' | 'mate' | null
+  scoreValue: number | null
+}
+
+/** One opponent move at a chosen strength (null = full strength). Not analysis: it may be weak on purpose. */
+export async function playEngineMove(fen: string, elo: number | null, movetimeMs: number): Promise<EngineMove> {
+  let response: Response
+  try {
+    response = await fetch('/api/engine/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen, elo, movetime_ms: movetimeMs }),
+    })
+  } catch {
+    throw new EngineError('Stockfish is not reachable.')
+  }
+  if (!response.ok) {
+    let detail = `Stockfish could not move (${response.status}).`
+    try {
+      const body = (await response.json()) as { error?: string }
+      if (body.error) detail = body.error
+    } catch {
+      // Keep the status message.
+    }
+    throw new EngineError(detail)
+  }
+  const body = (await response.json()) as {
+    uci: string
+    san: string
+    fen: string
+    score_type: 'cp' | 'mate' | null
+    score_value: number | null
+  }
+  return { uci: body.uci, san: body.san, fen: body.fen, scoreType: body.score_type, scoreValue: body.score_value }
+}

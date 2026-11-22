@@ -22,7 +22,7 @@ production deployment needs its own reverse proxy for `/api`.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # unit tests: clocks, evals, results, plan, recap, lessons, coach transport
+npm test         # unit tests: clocks, evals, notation, material, strength, keys, explorer, sounds, coach transport
 npm run lint     # oxlint
 npm run build    # type-check and production bundle
 ```
@@ -38,20 +38,41 @@ npm run build    # type-check and production bundle
 - The favourite line in a band is the stored opening name with the most games.
 - Endgame types are not stored on games, so the recap does not invent them.
 
-**Training** shows the ranked plan from `GET /api/coach/plan`.
+Every board view is **board first**: the board is sized to the window height,
+with player bars (name, rating, clock, captured pieces and material lead), an
+evaluation bar, and one tabbed side panel. On a phone the panel moves under the
+board. ← → step through moves, Home/End jump, F flips. Moves, captures, checks
+and castling make a short WebAudio sound (no audio files); the speaker button
+mutes it and the choice is remembered in this browser.
 
-- Each item is an opening, a defence, an endgame or a puzzle task. It carries
-  the reason it was chosen and the line to drill.
-- You can also play a full game against Stockfish (`POST /api/engine/analyze`)
-  from either colour.
+**Play & train**
+
+- *Play*: a new game against Stockfish with a colour, a strength
+  (`src/lib/strength.ts`, sent to `POST /api/engine/play` as `UCI_Elo`; until
+  you choose, the level closest to your average rating) and a time control.
+  The game runs continuously: no pause after each engine move. Hint, Takeback
+  (your move and the reply), Resign, Copy PGN and Explain last move are one
+  click away. Leaving the view pauses a running clock.
+- *Lessons*: the ranked plan from `GET /api/coach/plan` (openings, defences,
+  endgames, puzzles) plus your most played openings and defences to drill.
+- Tabs: Play, Moves (numbered move table), Coach, Explorer.
 
 **My games** groups stored games into Rapid, Blitz, Bullet, Daily and Bot
 folders. Each game:
 
 - opens at its key moment, the user move with the largest stored centipawn
-  loss;
-- draws the played move and the stored Stockfish alternative as arrows;
-- has a navigable move list, a position graph, and the coach beside the board.
+  loss, with the played move and the stored Stockfish move as arrows;
+- shows a numbered move table with `?!` (50 cp or more), `?` (100) and `??`
+  (300) from stored centipawn loss, and the mistake count for each side;
+- plays the Stockfish line instead of the key move with *Better move*; the
+  arrows and the table then follow that line until *Back to game*.
+- Tabs: Games, Moves, Coach, Explorer.
+
+**Explorer** (`GET /api/explorer`, Neo4j graph v2) lists the book moves, your
+moves and your opponents' moves from the position on the board, with games,
+score from the mover's side and your average centipawn loss, and your recent
+games through the position (click one to open it). Hovering a row draws its
+move on the board.
 
 ## Chess clock
 
@@ -71,11 +92,11 @@ folders. Each game:
 ```text
 src/
 ├── App.tsx               mode switch; views stay mounted to keep state
-├── components/           board, player bars, coach panel, position graph, stat card
-├── views/                Home (recap), Training, My games
-├── hooks/                chess clock, coach conversation, element size, position eval
-├── lib/                  clock rules, chess.js helpers, evals, graph builder, stats
-├── services/             coach transport and Stockfish calls through /api/engine
+├── components/           board stage, board, player bars, side panel, move table, explorer, coach panel, stat card
+├── views/                Home (recap), Play & train, My games
+├── hooks/                chess clock, coach conversation, board keys, player profile, element size, position eval
+├── lib/                  clock rules, chess.js helpers, evals, notation, material, strength, keys, explorer rows, sounds, stats
+├── services/             coach transport, Stockfish calls through /api/engine, explorer reads
 └── data/                 API reads (games, lessons, plan, recap) and their types
 ```
 
@@ -84,10 +105,9 @@ src/
 | Package | Role |
 | --- | --- |
 | `react-chessboard` + `chess.js` | Board rendering, drag and click moves, legality |
-| `react-force-graph-3d` + `three` + `three-spritetext` | Position graph with move labels |
 | `thinking-orbs` | Coach activity indicator |
 | `recharts` | Recap charts |
 | `motion` | Mode, folder, and card transitions |
 | `lucide-react` | Icons |
 
-The graph and the recap charts load as separate chunks on first use.
+The recap charts load as a separate chunk on first use. There is no WebGL dependency.

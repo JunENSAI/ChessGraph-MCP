@@ -363,7 +363,7 @@ uv run mcp dev chess_mcp/stockfish/server.py
 uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Seventeen routes serve the interface, the coaching reads, and the coach:
+Nineteen routes serve the interface, the coaching reads, and the coach:
 
 | Route | Purpose |
 | --- | --- |
@@ -372,22 +372,25 @@ Seventeen routes serve the interface, the coaching reads, and the coach:
 | `GET /api/recap` | Rating-band recap: win rate, lines, clocks, results |
 | `GET /api/games` | Filter games by player, type, outcome, ECO, and date |
 | `GET /api/games/{game_id}` | One game's metadata and movetext |
-| `GET /api/games/{game_id}/moves` | Paged moves, clocks, and stored evaluations |
+| `GET /api/games/{game_id}/moves` | Paged moves and stored evaluations |
 | `GET /api/lessons/openings` | Opening lessons for a colour |
 | `GET /api/lessons/endgames` | Endgame lessons for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest target, calculation, four tasks |
 | `GET /api/coach/plan` | The ranked training plan |
 | `GET /api/openings` | Opening theory for an exact normalized position |
 | `GET /api/positions` | Neo4j position context and outgoing moves |
+| `GET /api/explorer` | Book, your and your opponents' moves from a position, and your games through it |
 | `POST /api/engine/analyze` | Bounded MultiPV analysis |
 | `POST /api/engine/compare` | One played move against the best move, same root |
 | `POST /api/engine/validate` | Replay a UCI line into legal SAN and FENs |
+| `POST /api/engine/play` | One opponent move at a chosen strength (`UCI_Elo` 1320–3190, or full strength) |
 | `POST /api/coach/chat` | The in-app coach, streamed as server-sent events |
 | `GET /api/coach/status` | Whether the coach runs on Claude or offline |
 
 The UI proxies `/api` to `BACKEND_URL`. See [`backend/README.md`](backend/README.md).
-The Stockfish routes start their own engine on first use. The Stockfish MCP
-server keeps a separate engine of its own.
+The Stockfish routes start their own engine on first use. `/api/engine/play`
+uses a second process, so a weakened opponent never weakens analysis. The
+Stockfish MCP server keeps a separate engine of its own.
 
 ### 7. Run the UI
 
@@ -397,17 +400,27 @@ npm install
 npm run dev
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Every board view puts the
+board first, sized to the window, with one tabbed panel beside it (below it on
+a phone). The app has three modes:
 
 - **Home** — the default view. A rating-band recap counted from PostgreSQL
   through `GET /api/recap`. Pick a band and the charts recompute; each card
   opens into the chart and table behind it. The favourite line in a band is the
   stored opening name with the most games, so a line that was played can still
   rank behind a larger one.
-- **Training** — the ranked plan from `GET /api/coach/plan`, drilled on the
-  board with a hint drawn from your own stored move, and the live coach beside it.
-- **My games** — stored games grouped by time control, with the review jumping
-  to a game's recorded key moment.
+- **Play & train** — play Stockfish at a chosen strength (matched to your
+  average rating until you pick one) with a real clock, takeback, resign and
+  PGN copy, or drill the ranked plan from `GET /api/coach/plan`. Tabs: Play
+  (new game and lessons), Moves, Coach, Explorer.
+- **My games** — stored games grouped by time control. A game opens at its
+  recorded key moment; the move table marks `?!`, `?` and `??` from stored
+  centipawn loss. Tabs: Games, Moves, Coach, Explorer.
+
+The Explorer tab reads graph v2 through `GET /api/explorer`: book moves, your
+moves and your opponents' moves from the position on the board, with games and
+scores, and your recent games through it. ← → step through moves, Home/End jump,
+F flips the board.
 
 Every panel is a live read: the recap, games, lessons, coaching brief, plan, and
 position analysis all come from the retrieval API. There is no sample data in
@@ -424,7 +437,7 @@ The coach has two modes:
 - **Claude.** Used when `ANTHROPIC_API_KEY` is set in `.env`.
   - The API runs a tool loop on the Messages API (`CLAUDE_MODEL`, default
     `claude-opus-5-5`, with effort `CLAUDE_EFFORT`, default `low`).
-  - It uses twelve read-only tools that mirror the MCP contracts.
+  - It uses fourteen read-only tools that mirror the MCP contracts.
   - Usernames are replaced by "you" and "opponent" before any tool result
     leaves the machine.
   - `CLAUDE_REFUSAL_FALLBACK=default` lets the API retry a refused turn on a
@@ -520,7 +533,7 @@ ChessGraph-MCP/
 ├── backend/                   FastAPI reads for the UI
 ├── ui/                        React coach, all panels reading the API
 │   └── src/
-│       ├── views/             Home, Training, and My games
+│       ├── views/             Home, Play & train, and My games
 │       ├── data/              API-backed reads plus name and type helpers
 │       ├── lib/               chess rules, clocks, evaluations, graph, stats
 │       ├── components/        board, coach panel, eval bar, cards
@@ -553,7 +566,7 @@ It currently provides:
 - existing-data analysis over the loaded games;
 - ranked coaching briefs and a training plan derived from those games;
 - deterministic validation and typed evidence;
-- a local React interface for Home, Training, and game review, reading the API
+- a local React interface for Home, Play & train, and game review, reading the API
   rather than carrying sample data.
 
 The coach persona and skills live in [`plugins/chessgraph/`](plugins/chessgraph/).

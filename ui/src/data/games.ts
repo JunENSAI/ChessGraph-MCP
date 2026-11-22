@@ -119,12 +119,30 @@ async function readError(response: Response, fallback: string): Promise<string> 
   return fallback
 }
 
+export interface PlayerProfile {
+  username: string
+  averageRating: number | null
+}
+
+let profileRequest: Promise<PlayerProfile> | null = null
+
+/** The configured account (CHESS_USERNAME on the server). One request per page load. */
+export function loadPlayerProfile(): Promise<PlayerProfile> {
+  profileRequest ??= (async () => {
+    const response = await fetch('/api/player')
+    if (!response.ok) throw new Error(await readError(response, `Player request failed (${response.status}).`))
+    const body = (await response.json()) as { username?: string; average_rating?: number | null }
+    if (!body.username) throw new Error('The player summary has no username.')
+    return { username: body.username, averageRating: body.average_rating ?? null }
+  })().catch(error => {
+    profileRequest = null
+    throw error
+  })
+  return profileRequest
+}
+
 export async function loadPlayerName(): Promise<string> {
-  const response = await fetch('/api/player')
-  if (!response.ok) throw new Error(await readError(response, `Player request failed (${response.status}).`))
-  const body = (await response.json()) as { username?: string }
-  if (!body.username) throw new Error('The player summary has no username.')
-  return body.username
+  return (await loadPlayerProfile()).username
 }
 
 export async function loadGamesPage(
@@ -146,6 +164,15 @@ export async function loadGamesPage(
   })
   const rawCount = body.games?.length ?? 0
   return { games, rawCount, hasMore: rawCount === GAMES_PAGE }
+}
+
+/** One game by id, from the user's side. Used when the explorer opens a game that is not in a loaded folder. */
+export async function loadListedGame(gameId: number, username: string): Promise<ListedGame> {
+  const response = await fetch(`/api/games/${gameId}`)
+  if (!response.ok) throw new Error(await readError(response, `Game request failed (${response.status}).`))
+  const game = listedGame((await response.json()) as GameJson, username)
+  if (!game) throw new Error('This game was not played by the configured account.')
+  return game
 }
 
 export async function loadGameMoves(gameId: number): Promise<StoredMove[]> {

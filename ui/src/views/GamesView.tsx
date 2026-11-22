@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import {
   ArrowUpDown,
@@ -8,38 +8,47 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Compass,
   Folder,
   FolderOpen,
   Hourglass,
+  ListOrdered,
+  MessageSquare,
+  Sparkles,
   Target,
   Timer,
+  Volume2,
+  VolumeX,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { Chess } from 'chess.js'
-import { ChessBoard } from '../components/ChessBoard'
+import type { Arrow } from 'react-chessboard'
+import { BoardStage } from '../components/BoardStage'
 import { CoachPanel } from '../components/CoachPanel'
-import { EvalBar } from '../components/EvalBar'
-import { PlayerBar } from '../components/PlayerBar'
-import { CATEGORY_LABELS } from '../data/games'
+import { ExplorerPanel } from '../components/ExplorerPanel'
+import { MoveTable } from '../components/MoveTable'
+import { SidePanel } from '../components/SidePanel'
 import {
+  CATEGORY_LABELS,
   keyMomentFromMoves,
   loadGameMoves,
   loadGamesPage,
-  loadPlayerName,
+  loadListedGame,
   type ListedGame,
   type StoredMove,
 } from '../data/games'
 import type { GameCategory, KeyMoment } from '../data/types'
+import { useBoardKeys } from '../hooks/useBoardKeys'
 import { useCoach } from '../hooks/useCoach'
+import { usePlayerProfile } from '../hooks/usePlayerProfile'
 import { usePositionEval } from '../hooks/usePositionEval'
 import { replaySan, resultText, tryUci, type ReplayedPly } from '../lib/chess'
 import { whiteEvalFromStored } from '../lib/eval'
-import { NODE_COLORS, buildGameGraph, type GraphNode } from '../lib/graph'
+import { glyphFor } from '../lib/notation'
+import { isMuted, playSound, setMuted, soundFor } from '../lib/sound'
 import { createMessage, loadThread } from '../services/coach'
 import { analyzeFen } from '../services/engine'
-
-const PositionGraph = lazy(() => import('../components/PositionGraph'))
 
 const START_FEN = new Chess().fen()
 const CATEGORY_ORDER: GameCategory[] = ['rapid', 'blitz', 'bullet', 'daily', 'bot']
@@ -51,6 +60,11 @@ const CATEGORY_ICONS: Record<GameCategory, LucideIcon> = {
   bot: Bot,
 }
 const RESULT_LABEL = { win: 'Win', loss: 'Loss', draw: 'Draw', unfinished: 'Unfinished' }
+const ARROW = { played: '#ff7b72', best: '#b8f05a', preview: '#77a7ff' }
+/** Stored mate scores are flattened to +/-10000, so a loss this large is a swing to or from mate (as in the coach and the graph). */
+const MATE_SWING_CP = 5_000
+
+type ReviewTab = 'games' | 'moves' | 'coach' | 'explorer'
 
 interface FolderPage {
   games: ListedGame[]
@@ -91,19 +105,15 @@ function reviewIntro(game: ReviewedGame) {
   if (!key) {
     return createMessage('coach', 'No stored evaluation for this game, so there is no key moment to highlight.')
   }
-  const engine =
-    key.showEngine === false ? 'The engine move was not stored.' : `Stockfish preferred ${key.best}.`
-  const loss =
-    key.cpLoss == null ? '' : key.cpLoss >= 9000 ? ' The stored score is a mate.' : ` ${key.cpLoss} cp loss.`
-  return createMessage(
-    'coach',
-    `Key moment at move ${Math.ceil(key.ply / 2)}: you played ${key.played}. ${engine}${loss}`,
-  )
+  const engine = key.showEngine === false ? 'The engine move was not stored.' : `Stockfish preferred ${key.best}.`
+  const loss = key.cpLoss == null ? '' : key.cpLoss >= MATE_SWING_CP ? ' The stored score swings to a mate.' : ` ${key.cpLoss} cp loss.`
+  return createMessage('coach', `Key moment at move ${Math.ceil(key.ply / 2)}: you played ${key.played}. ${engine}${loss}`)
 }
 
 export function GamesView({ active }: { active: boolean }) {
   const keepThread = useRef(loadThread('review') !== null)
-  const [username, setUsername] = useState<string | null>(null)
+  const profile = usePlayerProfile()
+  const username = profile.loaded ? profile.username : null
   const [libraryError, setLibraryError] = useState<string | null>(null)
   const [openFolders, setOpenFolders] = useState<Set<GameCategory>>(() => new Set(['rapid']))
   const [folders, setFolders] = useState<Record<GameCategory, FolderPage>>(() => ({
@@ -114,6 +124,7 @@ export function GamesView({ active }: { active: boolean }) {
     bot: emptyFolder(),
   }))
   const [gameId, setGameId] = useState<number | null>(null)
+  const [extraGame, setExtraGame] = useState<ListedGame | null>(null)
   const [detail, setDetail] = useState<ReviewedGame | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [ply, setPly] = useState(0)
@@ -121,6 +132,9 @@ export function GamesView({ active }: { active: boolean }) {
   const lineToken = useRef(0)
   const [showAlternative, setShowAlternative] = useState(true)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
+  const [tab, setTab] = useState<ReviewTab>('games')
+  const [explorerArrow, setExplorerArrow] = useState<string | null>(null)
+  const [muted, setMutedState] = useState(isMuted)
   const coach = useCoach('review', [])
 
   const listed = useMemo(() => {
@@ -128,45 +142,23 @@ export function GamesView({ active }: { active: boolean }) {
       const found = folders[category].games.find(item => item.id === gameId)
       if (found) return found
     }
-    return null
-  }, [folders, gameId])
+    return extraGame?.id === gameId ? extraGame : null
+  }, [folders, gameId, extraGame])
 
   const plies = useMemo(() => (detail ? replaySan(detail.moves) : []), [detail])
-  const graph = useMemo(
-    () => (detail ? buildGameGraph({ moves: detail.moves, userColor: detail.userColor, keyMoment: detail.keyMoment }) : null),
-    [detail],
-  )
-  const gameFen = detail && ply > 0 && plies[ply - 1] ? plies[ply - 1].fenAfter : plies[0]?.fenBefore ?? START_FEN
-  const fen = line
-    ? line.index === 0
-      ? line.startFen
-      : line.moves[line.index - 1]?.fenAfter ?? line.startFen
-    : gameFen
+  const gameFen = detail && ply > 0 && plies[ply - 1] ? plies[ply - 1].fenAfter : (plies[0]?.fenBefore ?? START_FEN)
+  const fen = line ? (line.index === 0 ? line.startFen : (line.moves[line.index - 1]?.fenAfter ?? line.startFen)) : gameFen
   const storedMove = !line && detail && ply > 0 ? detail.stored[ply - 1] : undefined
-  const storedEval =
-    storedMove && storedMove.cpAfter !== null ? whiteEvalFromStored(storedMove.cpAfter, storedMove.mover) : null
+  const storedEval = storedMove && storedMove.cpAfter !== null ? whiteEvalFromStored(storedMove.cpAfter, storedMove.mover) : null
   const evaluation = usePositionEval(fen, line ? null : detail ? storedEval : { whiteCp: 0, mate: null })
 
   useEffect(() => {
-    let activeLoad = true
-    loadPlayerName()
-      .then(name => {
-        if (activeLoad) setUsername(name)
-      })
-      .catch((reason: unknown) => {
-        if (activeLoad) setLibraryError(reason instanceof Error ? reason.message : 'Games could not be loaded.')
-      })
-    return () => {
-      activeLoad = false
-    }
-  }, [])
+    if (profile.loaded) setLibraryError(null)
+  }, [profile.loaded])
 
   const fetchPage = (category: GameCategory, offset: number) => {
     if (!username) return
-    setFolders(current => ({
-      ...current,
-      [category]: { ...current[category], loading: true, error: null },
-    }))
+    setFolders(current => ({ ...current, [category]: { ...current[category], loading: true, error: null } }))
     loadGamesPage(username, category, offset)
       .then(page => {
         setFolders(current => {
@@ -183,19 +175,17 @@ export function GamesView({ active }: { active: boolean }) {
             },
           }
         })
-        if (offset === 0 && category === 'rapid') {
-          setGameId(current => current ?? page.games[0]?.id ?? null)
-        }
+        if (offset === 0 && category === 'rapid') setGameId(current => current ?? page.games[0]?.id ?? null)
       })
       .catch((reason: unknown) => {
         setFolders(current => ({
           ...current,
-            [category]: {
-              ...current[category],
-              loading: false,
-              settled: true,
-              error: reason instanceof Error ? reason.message : 'This time control could not be loaded.',
-            },
+          [category]: {
+            ...current[category],
+            loading: false,
+            settled: true,
+            error: reason instanceof Error ? reason.message : 'This time control could not be loaded.',
+          },
         }))
       })
   }
@@ -209,19 +199,13 @@ export function GamesView({ active }: { active: boolean }) {
 
   useEffect(() => {
     if (!listed) return
-    let activeLoad = true
+    let live = true
     setDetailError(null)
     loadGameMoves(listed.id)
       .then(stored => {
-        if (!activeLoad) return
+        if (!live) return
         const moves = stored.map(move => move.san)
-        const replay = replaySan(moves)
-        const review: ReviewedGame = {
-          ...listed,
-          moves,
-          stored,
-          keyMoment: keyMomentFromMoves(stored, listed.userColor, replay),
-        }
+        const review: ReviewedGame = { ...listed, moves, stored, keyMoment: keyMomentFromMoves(stored, listed.userColor, replaySan(moves)) }
         setDetail(review)
         setLine(null)
         setPly(review.keyMoment ? Math.max(0, review.keyMoment.ply - 1) : 0)
@@ -234,10 +218,10 @@ export function GamesView({ active }: { active: boolean }) {
         coach.reset([reviewIntro(review)])
       })
       .catch((reason: unknown) => {
-        if (activeLoad) setDetailError(reason instanceof Error ? reason.message : 'This game could not be loaded.')
+        if (live) setDetailError(reason instanceof Error ? reason.message : 'This game could not be loaded.')
       })
     return () => {
-      activeLoad = false
+      live = false
     }
     // coach.reset is stable. Reloading follows the selected game.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -261,40 +245,30 @@ export function GamesView({ active }: { active: boolean }) {
     : ply === 0 || !plies[ply - 1]
       ? null
       : { from: plies[ply - 1].from, to: plies[ply - 1].to }
-  const arrows =
-    !line &&
-    atKeyRoot && showAlternative && bestMove && plies[ply]
-      ? [
-          { startSquare: plies[ply].from, endSquare: plies[ply].to, color: NODE_COLORS.mistake },
-          { startSquare: bestMove.from, endSquare: bestMove.to, color: NODE_COLORS.best },
-        ]
-      : []
-
-  const goTo = (target: number) => {
-    if (line) {
-      setLine(current =>
-        current ? { ...current, index: Math.max(0, Math.min(current.moves.length, target)) } : current,
-      )
-      return
-    }
-    setPly(Math.max(0, Math.min(plies.length, target)))
+  const arrows: Arrow[] = []
+  if (!line && atKeyRoot && showAlternative && bestMove && plies[ply]) {
+    arrows.push({ startSquare: plies[ply].from, endSquare: plies[ply].to, color: ARROW.played })
+    arrows.push({ startSquare: bestMove.from, endSquare: bestMove.to, color: ARROW.best })
   }
+  if (explorerArrow) arrows.push({ startSquare: explorerArrow.slice(0, 2), endSquare: explorerArrow.slice(2, 4), color: ARROW.preview })
 
-  useEffect(() => {
-    if (!active) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
-      if (event.target instanceof HTMLSelectElement) return
-      if (event.key === 'ArrowLeft') goTo((line?.index ?? ply) - 1)
-      if (event.key === 'ArrowRight') goTo((line?.index ?? ply) + 1)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [active, plies.length, line, ply])
+  // Navigation works on whatever is shown: the game, or the better line.
+  const current = line ? line.index : ply
+  const last = line ? line.moves.length : plies.length
+  const goTo = (target: number) => {
+    const next = Math.max(0, Math.min(last, target))
+    if (next === current) return
+    const shown = line ? line.moves : plies
+    if (next === current + 1 && shown[next - 1]) playSound(soundFor(shown[next - 1].san, resultText(shown[next - 1].fenAfter) !== null))
+    if (line) setLine(value => (value ? { ...value, index: next } : value))
+    else setPly(next)
+  }
+  const flip = () => setOrientation(value => (value === 'white' ? 'black' : 'white'))
+  useBoardKeys(active, { index: current, last, go: goTo, flip })
 
   const toggleFolder = (category: GameCategory) => {
-    setOpenFolders(current => {
-      const next = new Set(current)
+    setOpenFolders(value => {
+      const next = new Set(value)
       if (next.has(category)) next.delete(category)
       else next.add(category)
       return next
@@ -303,27 +277,41 @@ export function GamesView({ active }: { active: boolean }) {
     if (!folder.loading && folder.games.length === 0) fetchPage(category, 0)
   }
 
+  const selectGame = (id: number) => {
+    setGameId(id)
+    setTab('moves')
+  }
+
+  const openGameById = (id: number) => {
+    if (!username) return
+    const known = CATEGORY_ORDER.some(category => folders[category].games.some(item => item.id === id))
+    if (known) {
+      selectGame(id)
+      return
+    }
+    loadListedGame(id, username)
+      .then(game => {
+        setExtraGame(game)
+        selectGame(game.id)
+      })
+      .catch((reason: unknown) => setDetailError(reason instanceof Error ? reason.message : 'This game could not be loaded.'))
+  }
+
   const showLine = async (startFen: string, moves: string[]) => {
     const token = ++lineToken.current
     const played: ReplayedPly[] = []
-    let current = startFen
+    let position = startFen
     setLine({ startFen, moves: [], index: 0 })
     for (const uci of moves) {
       if (token !== lineToken.current) return
-      const applied = tryUci(current, uci)
+      const applied = tryUci(position, uci)
       if (!applied) break
-      played.push({
-        ply: played.length + 1,
-        san: applied.san,
-        from: applied.from,
-        to: applied.to,
-        fenBefore: current,
-        fenAfter: applied.fen,
-      })
-      current = applied.fen
+      played.push({ ply: played.length + 1, san: applied.san, from: applied.from, to: applied.to, fenBefore: position, fenAfter: applied.fen })
+      position = applied.fen
       setLine({ startFen, moves: [...played], index: played.length })
+      playSound(soundFor(applied.san))
       await wait(360)
-      if (resultText(current)) return
+      if (resultText(position)) return
     }
   }
 
@@ -334,6 +322,38 @@ export function GamesView({ active }: { active: boolean }) {
     const played = detail?.stored.find(move => move.ply === key.ply)
     if (!root || !played || played.uci === key.bestUci) return null
     return { fen: root.fenBefore, uci: key.bestUci, played: key.played, best: key.best }
+  }
+
+  const playContinuation = async (startFen: string, seed: string[]) => {
+    const token = ++lineToken.current
+    const played: ReplayedPly[] = []
+    let position = startFen
+    setLine({ startFen, moves: [], index: 0 })
+    const push = async (uci: string) => {
+      if (token !== lineToken.current) return false
+      const applied = tryUci(position, uci)
+      if (!applied) return false
+      played.push({ ply: played.length + 1, san: applied.san, from: applied.from, to: applied.to, fenBefore: position, fenAfter: applied.fen })
+      position = applied.fen
+      setLine({ startFen, moves: [...played], index: played.length })
+      playSound(soundFor(applied.san))
+      await wait(280)
+      return token === lineToken.current
+    }
+    for (const uci of seed) {
+      if (!(await push(uci))) return
+      if (resultText(position)) break
+    }
+    while (played.length < 20 && !resultText(position)) {
+      try {
+        const analysis = await analyzeFen(position, { limitType: 'time', limitValue: 400 })
+        if (!(await push(analysis.uci))) return
+      } catch {
+        break
+      }
+    }
+    const text = resultText(position)
+    if (token === lineToken.current && text) coach.say(`${text} on the recommended line.`)
   }
 
   const playBetter = () => {
@@ -348,66 +368,17 @@ export function GamesView({ active }: { active: boolean }) {
     void playContinuation(fix.fen, [fix.uci])
   }
 
-  const playContinuation = async (startFen: string, seed: string[]) => {
-    const token = ++lineToken.current
-    const played: ReplayedPly[] = []
-    let current = startFen
-    setLine({ startFen, moves: [], index: 0 })
-    const push = async (uci: string) => {
-      if (token !== lineToken.current) return false
-      const applied = tryUci(current, uci)
-      if (!applied) return false
-      played.push({
-        ply: played.length + 1,
-        san: applied.san,
-        from: applied.from,
-        to: applied.to,
-        fenBefore: current,
-        fenAfter: applied.fen,
-      })
-      current = applied.fen
-      setLine({ startFen, moves: [...played], index: played.length })
-      await wait(280)
-      return token === lineToken.current
-    }
-    for (const uci of seed) {
-      if (!(await push(uci))) return
-      if (resultText(current)) break
-    }
-    while (played.length < 20 && !resultText(current)) {
-      try {
-        const analysis = await analyzeFen(current, { limitType: 'time', limitValue: 400 })
-        if (!(await push(analysis.uci))) return
-      } catch {
-        break
-      }
-    }
-    const text = resultText(current)
-    if (token === lineToken.current && text) coach.say(`${text} on the recommended line.`)
-  }
-
-  const selectNode = (node: GraphNode) => {
-    if (node.kind === 'best') {
-      playBetter()
-      return
-    }
-    setLine(null)
-    setPly(Math.max(0, Math.min(plies.length, node.ply)))
-    if (detail?.keyMoment && node.kind === 'mistake') {
-      setPly(detail.keyMoment.ply - 1)
-      setShowAlternative(true)
-    }
+  const toggleMute = () => {
+    setMuted(!muted)
+    setMutedState(!muted)
   }
 
   const game = detail
-  const selectedNodeId = `ply-${ply}`
-  const selectedNode = graph?.nodes.find(node => node.id === selectedNodeId)
   const userIsWhite = game?.userColor === 'white'
-  const topColor = orientation === 'white' ? 'black' : 'white'
-  const playerFor = (color: 'white' | 'black') => {
+  const seat = (color: 'white' | 'black') => {
     if (!game) return { name: color === 'white' ? 'White' : 'Black' }
     return (color === 'white') === userIsWhite
-      ? { name: 'Junior', rating: game.userElo ?? undefined }
+      ? { name: profile.username, rating: game.userElo ?? undefined }
       : { name: game.opponent, rating: game.opponentElo ?? undefined }
   }
   const moveLabel = line
@@ -416,95 +387,238 @@ export function GamesView({ active }: { active: boolean }) {
       : `${line.index}. ${line.moves[line.index - 1]?.san ?? ''}`
     : ply === 0
       ? 'Start'
-      : graph?.nodes[ply]?.label ?? `Move ${ply}`
+      : `${Math.ceil(ply / 2)}${ply % 2 === 1 ? '.' : '…'} ${plies[ply - 1]?.san ?? ''}${glyphFor(detail?.stored[ply - 1]?.cpLoss) ?? ''}`
   const lineResult = line ? resultText(fen) : null
+  const errors = useMemo(() => {
+    if (!detail) return { mine: 0, theirs: 0 }
+    const mover = detail.userColor === 'white' ? 'w' : 'b'
+    const count = (mine: boolean) =>
+      detail.stored.filter(move => (move.mover === mover) === mine && (glyphFor(move.cpLoss) === '?' || glyphFor(move.cpLoss) === '??')).length
+    return { mine: count(true), theirs: count(false) }
+  }, [detail])
+
+  const controls = (
+    <>
+      <button type="button" className="btn icon" aria-label="First move" onClick={() => goTo(0)} disabled={current === 0}>
+        <ChevronsLeft size={15} />
+      </button>
+      <button type="button" className="btn icon" aria-label="Previous move" onClick={() => goTo(current - 1)} disabled={current === 0}>
+        <ChevronLeft size={15} />
+      </button>
+      <span className="ply-label">{moveLabel}</span>
+      <button type="button" className="btn icon" aria-label="Next move" onClick={() => goTo(current + 1)} disabled={current >= last}>
+        <ChevronRight size={15} />
+      </button>
+      <button type="button" className="btn icon" aria-label="Last move" onClick={() => goTo(last)} disabled={current >= last}>
+        <ChevronsRight size={15} />
+      </button>
+      {line && (
+        <button type="button" className="btn" onClick={() => setLine(null)}>
+          Back to game
+        </button>
+      )}
+      <span className="spacer" />
+      <button type="button" className="btn icon" aria-label={muted ? 'Turn sound on' : 'Mute sound'} onClick={toggleMute}>
+        {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+      </button>
+      <button type="button" className="btn icon" aria-label="Flip board (F)" onClick={flip}>
+        <ArrowUpDown size={14} />
+      </button>
+    </>
+  )
+
+  const gamesTab = (
+    <div className="scroll-pane">
+      {libraryError && <p className="folder-note">{libraryError}</p>}
+      {!profile.loaded && <p className="folder-note">Reading your account…</p>}
+      {CATEGORY_ORDER.map(category => {
+        const folder = folders[category]
+        const open = openFolders.has(category)
+        const Icon = CATEGORY_ICONS[category]
+        return (
+          <div key={category} className="folder">
+            <button
+              type="button"
+              className={`folder-toggle${open ? ' open' : ''}`}
+              aria-expanded={open}
+              onClick={() => toggleFolder(category)}
+            >
+              {open ? <FolderOpen size={15} /> : <Folder size={15} />}
+              <Icon size={13} className="folder-kind" />
+              <span>{CATEGORY_LABELS[category]}</span>
+              <span className="count">{folder.settled ? `${folder.games.length}${folder.hasMore ? '+' : ''}` : '…'}</span>
+            </button>
+            <AnimatePresence initial={false}>
+              {open && (
+                <motion.div
+                  className="folder-body"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                >
+                  {category === 'bot' && <p className="folder-note">Bot games, labeled by time control.</p>}
+                  {!folder.settled && <p className="folder-note">Loading games…</p>}
+                  {folder.error && <p className="folder-note">{folder.error}</p>}
+                  {folder.settled && !folder.error && folder.games.length === 0 && <p className="folder-note">No games stored.</p>}
+                  {folder.games.map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`game-row${item.id === gameId ? ' active' : ''}`}
+                      onClick={() => selectGame(item.id)}
+                    >
+                      <span className="game-meta">
+                        {item.timeControl} · {item.playedOn}
+                      </span>
+                      <strong>{item.opening}</strong>
+                      <span className="game-meta">
+                        vs {item.opponent} · <span className={`result ${item.result}`}>{RESULT_LABEL[item.result]}</span> as{' '}
+                        {item.userColor === 'white' ? 'White' : 'Black'}
+                      </span>
+                    </button>
+                  ))}
+                  {folder.hasMore && (
+                    <button type="button" className="folder-more" disabled={folder.loading} onClick={() => fetchPage(category, folder.nextOffset)}>
+                      {folder.loading ? 'Loading…' : 'Load more'}
+                    </button>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )
+      })}
+    </div>
+  )
+
+  const movesTab = (
+    <div className="moves-tab">
+      <div className="key-card">
+        <div>
+          <span className="eyebrow">Key moment</span>
+          {game?.keyMoment ? (
+            <>
+              <strong>
+                {game.keyMoment.played}
+                {game.keyMoment.showEngine !== false && (
+                  <>
+                    {' '}
+                    <span className="vs">vs</span> {game.keyMoment.best}
+                  </>
+                )}
+              </strong>
+              <span className="muted">
+                {game.keyMoment.cpLoss == null
+                  ? game.keyMoment.explanation
+                  : game.keyMoment.cpLoss >= MATE_SWING_CP
+                    ? 'Stored score swings to a mate'
+                    : `${game.keyMoment.cpLoss} cp loss`}
+              </span>
+            </>
+          ) : (
+            <strong>{game ? 'No stored evaluation for this game.' : 'Choose a game.'}</strong>
+          )}
+        </div>
+        <div className="key-actions">
+          {game?.keyMoment && (
+            <button
+              type="button"
+              className={`btn${atKeyRoot && !line ? ' active' : ''}`}
+              onClick={() => {
+                setLine(null)
+                setPly(game.keyMoment!.ply - 1)
+                setShowAlternative(true)
+              }}
+            >
+              <Target size={14} /> Go there
+            </button>
+          )}
+          <button type="button" className="btn" disabled={!game || coach.phase !== 'idle'} onClick={playBetter}>
+            <Sparkles size={14} /> Better move
+          </button>
+        </div>
+      </div>
+      {game && (
+        <p className="muted small error-count">
+          Mistakes and blunders (100 cp or more): you {errors.mine} · opponent {errors.theirs}
+        </p>
+      )}
+      {line ? (
+        <>
+          <p className="line-note">
+            Stockfish line from move {Math.ceil((game?.keyMoment?.ply ?? 1) / 2)} · not the game{lineResult ? ` · ${lineResult}` : ''}
+          </p>
+          <MoveTable
+            plies={line.moves}
+            current={line.index}
+            startFen={line.startFen}
+            onSelect={index => setLine(value => (value ? { ...value, index } : value))}
+          />
+        </>
+      ) : (
+        <MoveTable
+          plies={plies.map((item, index) => ({ san: item.san, cpLoss: detail?.stored[index]?.cpLoss }))}
+          current={ply}
+          onSelect={setPly}
+          keyPly={game?.keyMoment?.ply ?? null}
+          empty={detailError ?? 'Choose a game in the Games tab.'}
+        />
+      )}
+      <p className="muted small keys-note">← → browse · Home/End jump · F flips · ?! ? ?? from stored centipawn loss</p>
+    </div>
+  )
+
+  const coachTab = (
+    <CoachPanel
+      embedded
+      className="review-coach"
+      title="Game review"
+      subtitle="Evaluation, the move, and a short reason"
+      messages={coach.messages}
+      phase={coach.phase}
+      trace={coach.trace}
+      mode={coach.mode}
+      prompts={['Why was this a mistake?', 'Why did I lose?', 'What should I play here?']}
+      onAsk={question => {
+        const fromFen = fen
+        void coach
+          .ask(question, {
+            mode: 'review',
+            fen: fromFen,
+            summary: game ? `${game.opening}, ${moveLabel}` : 'game',
+            gameId: game?.id,
+          })
+          .then(reply => {
+            const fix = correction()
+            if (wantsBoardLine(question) && fix) {
+              setPly(detail!.keyMoment!.ply - 1)
+              void playContinuation(fix.fen, [fix.uci])
+              return
+            }
+            const seed = reply?.play ?? []
+            if (seed.length > 0) void showLine(fromFen, seed)
+          })
+      }}
+    />
+  )
 
   return (
-    <div className="view games-view">
-      <section className="panel library-panel" aria-label="Game library">
-        <header className="panel-head">
-          <div>
-            <h2 className="panel-title">My games</h2>
-            <p className="panel-subtitle">
-              {libraryError ?? 'Your games, grouped by time control'}
-            </p>
-          </div>
-        </header>
-        <div className="scroll-pane">
-          {CATEGORY_ORDER.map(category => {
-            const folder = folders[category]
-            const open = openFolders.has(category)
-            const Icon = CATEGORY_ICONS[category]
-            return (
-              <div key={category} className="folder">
-                <button
-                  type="button"
-                  className={`folder-toggle${open ? ' open' : ''}`}
-                  aria-expanded={open}
-                  onClick={() => toggleFolder(category)}
-                >
-                  {open ? <FolderOpen size={15} /> : <Folder size={15} />}
-                  <Icon size={13} className="folder-kind" />
-                  <span>{CATEGORY_LABELS[category]}</span>
-                  <span className="count">
-                    {folder.settled ? `${folder.games.length}${folder.hasMore ? '+' : ''}` : '…'}
-                  </span>
-                </button>
-                <AnimatePresence initial={false}>
-                  {open && (
-                    <motion.div
-                      className="folder-body"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.18 }}
-                    >
-                      {category === 'bot' && <p className="folder-note">Bot games, labeled by time control.</p>}
-                      {!folder.settled && <p className="folder-note">Loading games…</p>}
-                      {folder.error && <p className="folder-note">{folder.error}</p>}
-                      {folder.settled && !folder.error && folder.games.length === 0 && (
-                        <p className="folder-note">No games stored.</p>
-                      )}
-                      {folder.games.map(item => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className={`game-row${item.id === gameId ? ' active' : ''}`}
-                          onClick={() => setGameId(item.id)}
-                        >
-                          <span className="game-meta">
-                            {item.timeControl} · {item.playedOn}
-                          </span>
-                          <strong>{item.opening}</strong>
-                          <span className="game-meta">
-                            vs {item.opponent} ·{' '}
-                            <span className={`result ${item.result}`}>{RESULT_LABEL[item.result]}</span> as{' '}
-                            {item.userColor === 'white' ? 'White' : 'Black'}
-                          </span>
-                        </button>
-                      ))}
-                      {folder.hasMore && (
-                        <button
-                          type="button"
-                          className="folder-more"
-                          disabled={folder.loading}
-                          onClick={() => fetchPage(category, folder.nextOffset)}
-                        >
-                          {folder.loading ? 'Loading…' : 'Load more'}
-                        </button>
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="panel board-panel review-board" aria-label="Game review board">
-        <header className="panel-head">
-          <div>
+    <div className="view play-layout">
+      <BoardStage
+        id="review-board"
+        fen={fen}
+        orientation={orientation}
+        white={seat('white')}
+        black={seat('black')}
+        evaluation={evaluation}
+        interactive={false}
+        lastMove={lastMove}
+        arrows={arrows}
+        overlay={lineResult ? <p>{lineResult}</p> : null}
+        controls={controls}
+        header={
+          <>
             <h2 className="panel-title">
               {game?.opening ?? 'Game'} {game && <span className="eco">{game.eco}</span>}
             </h2>
@@ -512,179 +626,31 @@ export function GamesView({ active }: { active: boolean }) {
               {detailError
                 ? detailError
                 : line
-                  ? `Better line · ${line.moves[0]?.san ?? '…'} instead of your move · ${line.index} of ${line.moves.length}${lineResult ? ` · ${lineResult}` : ''}`
+                  ? `Better line · ${line.moves[0]?.san ?? '…'} instead of your move · ${line.index} of ${line.moves.length}`
                   : game
-                    ? `${CATEGORY_LABELS[game.category]} · ${game.timeControl} · ${RESULT_LABEL[game.result]}`
+                    ? `${CATEGORY_LABELS[game.category]} · ${game.timeControl} · ${game.playedOn} · ${RESULT_LABEL[game.result]} as ${game.userColor === 'white' ? 'White' : 'Black'}`
                     : 'Choose a game'}
             </p>
-          </div>
-          <button
-            type="button"
-            className="btn icon"
-            aria-label="Flip board"
-            onClick={() => setOrientation(value => (value === 'white' ? 'black' : 'white'))}
-          >
-            <ArrowUpDown size={14} />
-          </button>
-        </header>
-        <div className="board-stack">
-          <PlayerBar {...playerFor(topColor)} color={topColor} />
-          <div className="board-and-eval">
-            <EvalBar orientation={orientation} evaluation={evaluation.evaluation} pending={evaluation.pending} />
-            <div className="board-frame">
-              {lineResult && <div className="board-result">{lineResult}</div>}
-              <ChessBoard
-                id="review-board"
-                fen={fen}
-                orientation={orientation}
-                interactive={false}
-                lastMove={lastMove}
-                arrows={arrows}
-              />
-            </div>
-          </div>
-          <PlayerBar {...playerFor(orientation)} color={orientation} />
-        </div>
-        <div className="board-controls">
-          <button type="button" className="btn icon" aria-label="First move" onClick={() => goTo(0)}>
-            <ChevronsLeft size={15} />
-          </button>
-          <button type="button" className="btn icon" aria-label="Previous move" onClick={() => goTo(ply - 1)}>
-            <ChevronLeft size={15} />
-          </button>
-          <span className="ply-label">{moveLabel}</span>
-          <button
-            type="button"
-            className="btn"
-            disabled={!game || coach.phase !== 'idle'}
-            onClick={playBetter}
-          >
-            Better move
-          </button>
-          {line && (
-            <button type="button" className="btn" onClick={() => setLine(null)}>
-              Game
-            </button>
-          )}
-          <button type="button" className="btn icon" aria-label="Next move" onClick={() => goTo(ply + 1)}>
-            <ChevronRight size={15} />
-          </button>
-          <button type="button" className="btn icon" aria-label="Last move" onClick={() => goTo(plies.length)}>
-            <ChevronsRight size={15} />
-          </button>
-          <span className="spacer" />
-          {game?.keyMoment && (
-            <button
-              type="button"
-              className={`btn${atKeyRoot ? ' active' : ''}`}
-              onClick={() => {
-                setPly(game.keyMoment!.ply - 1)
-                setShowAlternative(true)
-              }}
-            >
-              <Target size={14} /> Key moment
-            </button>
-          )}
-        </div>
-        <ol className="move-list" aria-label="Moves">
-          {plies.map(item => (
-            <li key={item.ply}>
-              {item.ply % 2 === 1 && <span className="move-number">{Math.ceil(item.ply / 2)}.</span>}
-              <button
-                type="button"
-                className={`move${item.ply === ply ? ' current' : ''}${item.ply === game?.keyMoment?.ply ? ' key' : ''}`}
-                onClick={() => goTo(item.ply)}
-              >
-                {item.san}
-              </button>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="panel graph-panel" aria-label="Position graph">
-        <header className="panel-head">
-          <div>
-            <h2 className="panel-title">ChessGraph</h2>
-            <p className="panel-subtitle">Played path and Stockfish alternative</p>
-          </div>
-        </header>
-        {active && graph ? (
-          <Suspense fallback={<div className="graph-canvas graph-loading">Loading 3D graph…</div>}>
-            <PositionGraph graph={graph} selectedId={selectedNodeId} onSelect={selectNode} />
-          </Suspense>
-        ) : (
-          <div className="graph-canvas" />
-        )}
-        <div className="graph-info">
-          <div className="legend">
-            {(['user', 'opponent', 'mistake', 'best'] as const).map(kind => (
-              <span key={kind}>
-                <i style={{ background: NODE_COLORS[kind] }} />
-                {{ user: 'Your move', opponent: 'Opponent', mistake: 'Key moment', best: 'Stockfish best' }[kind]}
-              </span>
-            ))}
-          </div>
-          <div className="key-card">
-            <div>
-              <span className="eyebrow">Key moment</span>
-              {game?.keyMoment ? (
-                <>
-                  <strong>
-                    {game.keyMoment.played}
-                    {game.keyMoment.showEngine !== false && (
-                      <>
-                        {' '}
-                        <span className="vs">vs</span> {game.keyMoment.best}
-                      </>
-                    )}
-                  </strong>
-                  <span className="muted">
-                    {game.keyMoment.cpLoss == null
-                      ? game.keyMoment.explanation
-                      : game.keyMoment.cpLoss >= 9000
-                        ? 'Stored score is a mate'
-                        : `${game.keyMoment.cpLoss} cp loss`}
-                  </span>
-                </>
-              ) : (
-                <strong>No stored evaluation for this game.</strong>
-              )}
-            </div>
-            <span className="node-chip">{selectedNode?.label ?? 'Start'}</span>
-          </div>
-        </div>
-      </section>
-
-      <CoachPanel
-        className="review-coach"
-        title="Game review"
-        subtitle="Evaluation, the move, and a short reason"
-        messages={coach.messages}
-        phase={coach.phase}
-        trace={coach.trace}
-        mode={coach.mode}
-        prompts={['Why was this a mistake?', 'Why did I lose?', 'What should I play here?']}
-        onAsk={question => {
-          const fromFen = fen
-          void coach
-            .ask(question, {
-              mode: 'review',
-              fen: fromFen,
-              summary: game ? `${game.opening}, ${moveLabel}` : 'game',
-              gameId: game?.id,
-            })
-            .then(reply => {
-              const fix = correction()
-              if (wantsBoardLine(question) && fix) {
-                setPly(detail!.keyMoment!.ply - 1)
-                void playContinuation(fix.fen, [fix.uci])
-                return
-              }
-              const seed = reply?.play ?? []
-              if (seed.length > 0) void showLine(fromFen, seed)
-            })
-        }}
+          </>
+        }
+      />
+      <SidePanel<ReviewTab>
+        label="Review"
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { id: 'games', label: 'Games', icon: FolderOpen, content: gamesTab },
+          { id: 'moves', label: 'Moves', icon: ListOrdered, content: movesTab },
+          { id: 'coach', label: 'Coach', icon: MessageSquare, content: coachTab },
+          {
+            id: 'explorer',
+            label: 'Explorer',
+            icon: Compass,
+            content: (
+              <ExplorerPanel fen={fen} active={active && tab === 'explorer'} onPreview={setExplorerArrow} onOpenGame={openGameById} />
+            ),
+          },
+        ]}
       />
     </div>
   )
