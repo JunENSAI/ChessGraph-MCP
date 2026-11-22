@@ -110,7 +110,7 @@ process. A model key, when one is added, stays server-side and is never a
 ## Layout
 
 - `chess_mcp/` — MCP servers, models, repositories, `status` and `smoke` checks
-- `backend/` — FastAPI reads for the UI, using those repositories
+- `backend/` — FastAPI reads for the UI, and `backend/coach/`, the in-app coach (Claude tool loop or offline evidence mode)
 - `etl/` — writers and the SQL schema
 - `ui/` — React coach, reading the retrieval API
 - `plugins/chessgraph/` — Claude Code plugin: MCP servers, coach agent, skills

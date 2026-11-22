@@ -1,15 +1,28 @@
 import type { OrbState } from 'thinking-orbs'
 
-export type CoachPhase = 'idle' | 'postgres' | 'neo4j' | 'stockfish' | 'composing'
+/**
+ * Coach transport. The browser posts the question and board context to the
+ * retrieval API (`POST /api/coach/chat`), which runs Claude's tool loop over
+ * the ChessGraph repositories — or the offline evidence mode when no
+ * ANTHROPIC_API_KEY is set — and streams server-sent events back. No model key
+ * ever reaches the browser.
+ */
+
+export type EvidenceSource = 'postgres' | 'neo4j' | 'stockfish'
+export type CoachPhase = 'idle' | EvidenceSource | 'composing'
 export type CoachView = 'training' | 'review'
+export type CoachMode = 'claude' | 'offline'
+export type StepState = 'running' | 'done' | 'failed'
+export type CoachTrace = Partial<Record<EvidenceSource, StepState>>
 
 export interface CoachMessage {
   id: string
   role: 'user' | 'coach'
   text: string
-  demo?: boolean
+  mode?: CoachMode
   cached?: boolean
-  /** UCI moves the training board should play. Not shown as prose. */
+  pending?: boolean
+  /** UCI moves the board should play. Not shown as prose. */
   play?: string[]
 }
 
@@ -19,14 +32,37 @@ export interface PlayedMove {
   evalText: string
 }
 
+export interface HistoryTurn {
+  role: 'user' | 'coach'
+  text: string
+}
+
 export interface CoachContext {
   mode: CoachView
   fen: string
   summary: string
-  /** Set when the board already played a Stockfish move and Hermes should only explain it. */
+  /** Set when the board already played a move and the coach should only explain it. */
   played?: PlayedMove
   /** One-line profile from /api/coach/plan, so answers are framed by the player's own results. */
   profile?: string
+  /** Stored game under review, so the coach can read its mistakes. */
+  gameId?: number
+  history?: HistoryTurn[]
+}
+
+export type CoachEvent =
+  | { type: 'start'; mode: CoachMode; model: string | null }
+  | { type: 'tool_start'; tool: string; source: EvidenceSource }
+  | { type: 'tool_end'; tool: string; source: EvidenceSource; ok: boolean }
+  | { type: 'text'; text: string }
+  | { type: 'done'; mode: CoachMode; stop_reason: string }
+  | { type: 'error'; message: string }
+
+export interface CoachHandlers {
+  onPhase?: (phase: CoachPhase) => void
+  onText?: (textSoFar: string) => void
+  onTrace?: (trace: CoachTrace) => void
+  onMode?: (mode: CoachMode) => void
 }
 
 export const PHASE_ORB: Record<CoachPhase, OrbState> = {
@@ -42,30 +78,28 @@ export const PHASE_LABEL: Record<CoachPhase, string> = {
   postgres: 'Reading your games',
   neo4j: 'Traversing ChessGraph',
   stockfish: 'Checking with Stockfish',
-  composing: 'Writing the explanation',
+  composing: 'Writing the answer',
 }
 
-export const PHASE_TRACE: Exclude<CoachPhase, 'idle'>[] = ['postgres', 'neo4j', 'stockfish', 'composing']
+export const TRACE_SOURCES: EvidenceSource[] = ['postgres', 'neo4j', 'stockfish']
 
 const LOG_KEY = 'chessgraph-coach-log'
 const LOG_LIMIT = 50
+const HISTORY_TURNS = 6
 const UCI_MOVE = /^[a-h][1-8][a-h][1-8][qrbn]?$/
+
+export const COACH_ENDPOINT = '/api/coach/chat'
+const REQUEST_TIMEOUT_MS = 180_000
 
 let messageCounter = 0
 export function createMessage(
   role: CoachMessage['role'],
   text: string,
-  demo = false,
-  extra: { cached?: boolean; play?: string[] } = {},
+  extra: Omit<Partial<CoachMessage>, 'id' | 'role' | 'text'> = {},
 ): CoachMessage {
   messageCounter += 1
-  return { id: `m-${Date.now()}-${messageCounter}`, role, text, demo, ...extra }
+  return { id: `m-${Date.now()}-${messageCounter}`, role, text, ...extra }
 }
-
-/** Same-origin path served by the Vite proxy, which injects the bearer key. */
-const COACH_ENDPOINT = '/hermes-api/chat/completions'
-const COACH_MODEL = 'hermes-agent'
-const REQUEST_TIMEOUT_MS = 180_000
 
 /** Raised when the coach call cannot produce an evidence-backed answer. */
 export class CoachUnavailableError extends Error {
@@ -73,10 +107,6 @@ export class CoachUnavailableError extends Error {
     super(message)
     this.name = 'CoachUnavailableError'
   }
-}
-
-interface ChatCompletion {
-  choices?: { message?: { content?: string | null } | null }[] | null
 }
 
 export interface KeyValueStore {
@@ -89,6 +119,7 @@ interface CacheEntry {
   fen: string
   question: string
   answer: string
+  mode?: CoachMode
 }
 
 interface CoachLog {
@@ -116,7 +147,7 @@ export function parsePlayMoves(text: string): string[] {
 }
 
 export function coachProse(text: string): string {
-  const stripped = text.replace(/^PLAY:\s*.+$/gim, '').trim()
+  const stripped = text.replace(/^PLAY:\s*.*$/gim, '').trim()
   return stripped || text.trim()
 }
 
@@ -156,7 +187,7 @@ export function loadThread(view: CoachView, store: KeyValueStore | null = browse
   const thread = readLog(store).threads[view]
   // A lesson intro saved before the catalog loads is not a conversation to restore.
   if (!thread?.some(message => message.role === 'user')) return null
-  return thread
+  return thread.filter(message => !message.pending)
 }
 
 export function saveThread(
@@ -165,7 +196,7 @@ export function saveThread(
   store: KeyValueStore | null = browserStore(),
 ): void {
   const log = readLog(store)
-  log.threads[view] = messages.slice(-LOG_LIMIT)
+  log.threads[view] = messages.filter(message => !message.pending).slice(-LOG_LIMIT)
   writeLog(store, log)
 }
 
@@ -178,10 +209,9 @@ export function cachedAnswer(
   fen: string,
   question: string,
   store: KeyValueStore | null = browserStore(),
-): string | null {
+): CacheEntry | null {
   const key = cacheKey(view, fen, question)
-  const hit = readLog(store).cache.find(entry => cacheKey(entry.view, entry.fen, entry.question) === key)
-  return hit?.answer ?? null
+  return readLog(store).cache.find(entry => cacheKey(entry.view, entry.fen, entry.question) === key) ?? null
 }
 
 export function rememberAnswer(
@@ -189,152 +219,172 @@ export function rememberAnswer(
   fen: string,
   question: string,
   answer: string,
+  mode: CoachMode,
   store: KeyValueStore | null = browserStore(),
 ): void {
   const log = readLog(store)
   const key = cacheKey(view, fen, question)
   const next = log.cache.filter(entry => cacheKey(entry.view, entry.fen, entry.question) !== key)
-  next.push({ view, fen: positionKey(fen), question: question.trim(), answer })
+  next.push({ view, fen: positionKey(fen), question: question.trim(), answer, mode })
   log.cache = next.slice(-LOG_LIMIT)
   writeLog(store, log)
 }
 
-const COURSE_QUESTION =
-  /\b(train|weakness|strengths?|openings?|defen[cs]e|london|work on|what should i|(?:common|repeated|my) mistakes?)\b/i
-
-export function isCourseQuestion(question: string): boolean {
-  return COURSE_QUESTION.test(question)
-}
-
-export function buildPrompt(question: string, context: CoachContext): string {
-  if (context.played) {
-    return [
-      `Position (normalized FEN): ${context.fen}`,
-      `The interface already played ${context.played.san} for ${context.played.color}.`,
-      `Stockfish evaluation, from the side to move before that move: ${context.played.evalText}.`,
-      'Explain only this move in two sentences.',
-      'Do not call tools. Do not print a FEN, a variation, or any other move.',
-    ].join('\n')
-  }
-  const subject = context.mode === 'training' ? 'training position' : 'position from my game'
-  if (isCourseQuestion(question)) {
-    return [
-      `Position (normalized FEN): ${context.fen}`,
-      `Context: ${subject} — ${context.summary}`,
-      ...(context.profile ? [`Your profile: ${context.profile}`] : []),
-      '',
-      question,
-      '',
-      'Call get_coaching_brief first. Cite only fields it returned.',
-      'Name the four training tasks and the reason field of each.',
-      'Then call analyze_position on the task the question is about, with multipv=1.',
-      'Cite depth only from the tool result field limit.value.',
-      'Do not claim an endgame weakness. The brief says endgame type is not stored on games.',
-      'If the brief has no target split, say that evidence is missing and do not invent a move.',
-      '',
-      'Answer in this shape and nothing longer:',
-      'STRENGTH: <one family from the brief>',
-      'TARGET: <the played move and the stored move>',
-      'MOVE: <one SAN move>',
-      '<at most two sentences>',
-      'PLAY: <that one UCI move>',
-    ].join('\n')
-  }
-  return [
-    `Position (normalized FEN): ${context.fen}`,
-    `Context: ${subject} — ${context.summary}`,
-    ...(context.profile ? [`Your profile: ${context.profile}`] : []),
-    '',
-    question,
-    '',
-    'Answer in this shape and nothing longer:',
-    'EVAL: <score from the tool>',
-    'MOVE: <one SAN move>',
-    '<at most two sentences>',
-    'PLAY: <up to 6 UCI moves, space separated>',
-    '',
-    'Call analyze_position with multipv=1. Cite depth only from the tool result field limit.value.',
-    'Do not list other engine ranks. Do not print a final FEN.',
-    'Do not narrate empty Postgres or Neo4j results unless the question is about my games or the graph.',
-    'If a tool returned nothing for a question that needed it, say that evidence is missing in one clause.',
-  ].join('\n')
-}
-
-function failureFor(status: number): string {
-  if (status === 401) {
-    return 'Hermes rejected the key. Check that HERMES_API_KEY in the project .env matches API_SERVER_KEY in ~/.hermes/.env, then restart the gateway.'
-  }
-  if (status === 403) {
-    return (
-      'The Hermes gateway refused the request because it carried an Origin header. ' +
-      'It accepts no cross-origin browser callers: the dev proxy must strip Origin and Referer ' +
-      'before forwarding (see ui/vite.config.ts). This is not a key problem.'
-    )
-  }
-  if (status === 404) {
-    return `Hermes has no route at ${COACH_ENDPOINT}. The Vite proxy or the gateway API server is not enabled.`
-  }
-  if (status >= 500) {
-    return `Hermes failed while answering (HTTP ${status}). Check ~/.hermes/logs/gateway.log.`
-  }
-  return `The coach request failed (HTTP ${status}).`
-}
-
-function present(raw: string, cached = false): CoachMessage {
-  return createMessage('coach', coachProse(raw), false, { cached, play: parsePlayMoves(raw) })
+/** Recent text turns, sent so follow-up questions keep their context. */
+export function historyFrom(messages: CoachMessage[], limit = HISTORY_TURNS): HistoryTurn[] {
+  return messages
+    .filter(message => !message.pending && message.text.trim())
+    .slice(-limit)
+    .map(message => ({ role: message.role, text: message.text.slice(0, 4000) }))
 }
 
 /**
- * Post the question and board context to the Hermes gateway, which answers with
- * the ChessGraph MCP tools. The bearer key is added by the local proxy, never
- * read from a VITE_ variable or sent from the browser.
- *
- * A repeated question on the same position returns the stored answer.
+ * Split a server-sent-event buffer into complete events and the unfinished
+ * rest. Only `data:` lines are used; each event is one JSON object.
+ */
+export function parseSse(buffer: string): { events: CoachEvent[]; rest: string } {
+  const normalized = buffer.replace(/\r\n/g, '\n')
+  const blocks = normalized.split('\n\n')
+  const rest = blocks.pop() ?? ''
+  const events: CoachEvent[] = []
+  for (const block of blocks) {
+    const data = block
+      .split('\n')
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+    if (!data) continue
+    try {
+      events.push(JSON.parse(data) as CoachEvent)
+    } catch {
+      // A malformed event is skipped; the stream carries on.
+    }
+  }
+  return { events, rest }
+}
+
+function requestBody(question: string, context: CoachContext) {
+  return {
+    question,
+    fen: context.fen,
+    view: context.mode,
+    summary: context.summary.slice(0, 600),
+    profile: (context.profile ?? '').slice(0, 600),
+    game_id: context.gameId ?? null,
+    played: context.played
+      ? { san: context.played.san, color: context.played.color, eval_text: context.played.evalText }
+      : null,
+    history: context.history ?? [],
+  }
+}
+
+async function failureFor(response: Response): Promise<string> {
+  let detail = ''
+  try {
+    const body = (await response.json()) as { error?: string; detail?: unknown }
+    detail = typeof body.error === 'string' ? body.error : ''
+  } catch {
+    // Not JSON: fall back to the status text below.
+  }
+  if (response.status === 404) return 'The API has no coach route. Restart it from this checkout.'
+  if (response.status === 422) return 'The coach could not read this question (invalid request).'
+  if (response.status === 503) return detail || 'A ChessGraph store is down. Run uv run chessgraph-status.'
+  return detail || `The coach request failed (HTTP ${response.status}).`
+}
+
+function present(raw: string, mode: CoachMode, cached = false): CoachMessage {
+  return createMessage('coach', coachProse(raw), { mode, cached, play: parsePlayMoves(raw) })
+}
+
+/**
+ * Ask the coach. Streams progress through the handlers and resolves with the
+ * final message. A repeated question on the same position returns the stored
+ * answer without a request.
  */
 export async function askCoach(
   question: string,
   context: CoachContext,
-  onPhase: (phase: CoachPhase) => void,
+  handlers: CoachHandlers = {},
   store: KeyValueStore | null = browserStore(),
 ): Promise<CoachMessage> {
-  const cached = cachedAnswer(context.mode, context.fen, question, store)
-  if (cached) return present(cached, true)
+  const hit = cachedAnswer(context.mode, context.fen, question, store)
+  if (hit) return present(hit.answer, hit.mode ?? 'offline', true)
 
-  onPhase('composing')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const trace: CoachTrace = {}
+  let mode: CoachMode = 'offline'
+  let text = ''
+  handlers.onPhase?.('composing')
 
   try {
-    const response = await fetch(COACH_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: COACH_MODEL,
-        messages: [{ role: 'user', content: buildPrompt(question, context) }],
-        stream: false,
-      }),
-      signal: controller.signal,
-    })
+    let response: Response
+    try {
+      response = await fetch(COACH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify(requestBody(question, context)),
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      throw new CoachUnavailableError(
+        'Could not reach the ChessGraph API. Start it with: uv run uvicorn backend.main:app --port 8000',
+      )
+    }
+    if (!response.ok) throw new CoachUnavailableError(await failureFor(response))
+    if (!response.body) throw new CoachUnavailableError('The coach returned an empty response.')
 
-    if (!response.ok) throw new CoachUnavailableError(failureFor(response.status))
-
-    const payload = (await response.json()) as ChatCompletion
-    const text = payload.choices?.[0]?.message?.content?.trim()
-    if (!text) throw new CoachUnavailableError('Hermes returned an empty answer.')
-    rememberAnswer(context.mode, context.fen, question, text, store)
-    return present(text)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finished = false
+    while (!finished) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
+      const parsed = parseSse(done ? `${buffer}\n\n` : buffer)
+      buffer = parsed.rest
+      for (const event of parsed.events) {
+        switch (event.type) {
+          case 'start':
+            mode = event.mode
+            handlers.onMode?.(mode)
+            break
+          case 'tool_start':
+            trace[event.source] = 'running'
+            handlers.onTrace?.({ ...trace })
+            handlers.onPhase?.(event.source)
+            break
+          case 'tool_end':
+            trace[event.source] = event.ok ? 'done' : 'failed'
+            handlers.onTrace?.({ ...trace })
+            handlers.onPhase?.('composing')
+            break
+          case 'text':
+            text += event.text
+            handlers.onText?.(coachProse(text))
+            break
+          case 'error':
+            throw new CoachUnavailableError(event.message)
+          case 'done':
+            finished = true
+            break
+        }
+      }
+      if (done) break
+    }
+    const answer = text.trim()
+    if (!answer) throw new CoachUnavailableError('The coach returned an empty answer.')
+    rememberAnswer(context.mode, context.fen, question, answer, mode, store)
+    return present(answer, mode)
   } catch (error) {
     if (error instanceof CoachUnavailableError) throw error
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new CoachUnavailableError(
-        `Hermes did not answer within ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s.`,
-      )
+      throw new CoachUnavailableError(`The coach did not answer within ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s.`)
     }
-    throw new CoachUnavailableError(
-      `Could not reach Hermes at ${COACH_ENDPOINT}. Start the gateway (hermes gateway status) and retry.`,
-    )
+    throw new CoachUnavailableError('The coach stream was interrupted. Ask again.')
   } finally {
     clearTimeout(timer)
-    onPhase('idle')
+    handlers.onPhase?.('idle')
   }
 }

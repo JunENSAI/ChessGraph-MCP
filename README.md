@@ -65,7 +65,7 @@ flowchart LR
     end
 
     subgraph runtime [Read paths]
-        api["FastAPI retrieval"]
+        api["FastAPI retrieval + in-app coach"]
         pgMcp["PostgreSQL MCP: 9 tools"]
         graphMcp["Neo4j MCP: 6 tools"]
         sfMcp["Stockfish MCP: 3 tools"]
@@ -86,7 +86,8 @@ flowchart LR
     graphSync --> neo4j
 
     ui -->|"page facts"| api
-    ui -->|"questions"| host
+    ui -->|"questions (SSE)"| api
+    api -->|"tool loop"| claudeApi["Claude API"]
     api -->|"repository reads"| postgres
     api -->|"repository reads"| neo4j
     api -->|"bounded search"| stockfish
@@ -362,7 +363,7 @@ uv run mcp dev chess_mcp/stockfish/server.py
 uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Fifteen routes serve the interface and the coaching reads:
+Seventeen routes serve the interface, the coaching reads, and the coach:
 
 | Route | Purpose |
 | --- | --- |
@@ -381,6 +382,8 @@ Fifteen routes serve the interface and the coaching reads:
 | `POST /api/engine/analyze` | Bounded MultiPV analysis |
 | `POST /api/engine/compare` | One played move against the best move, same root |
 | `POST /api/engine/validate` | Replay a UCI line into legal SAN and FENs |
+| `POST /api/coach/chat` | The in-app coach, streamed as server-sent events |
+| `GET /api/coach/status` | Whether the coach runs on Claude or offline |
 
 The UI proxies `/api` to `BACKEND_URL`. See [`backend/README.md`](backend/README.md).
 The Stockfish routes start their own engine on first use. The Stockfish MCP
@@ -408,8 +411,32 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The app has three modes:
 
 Every panel is a live read: the recap, games, lessons, coaching brief, plan, and
 position analysis all come from the retrieval API. There is no sample data in
-the interface. The coach panel is being moved from the old Hermes gateway proxy
-to a Claude tool loop inside the API (see `CHANGELOG.md`).
+the interface.
+
+### The in-app coach
+
+The coach panel posts to `POST /api/coach/chat`, and the API streams the answer
+back as server-sent events. The UI lights each evidence chip (Games, Graph,
+Stockfish) as the matching tool runs.
+
+The coach has two modes:
+
+- **Claude.** Used when `ANTHROPIC_API_KEY` is set in `.env`.
+  - The API runs a tool loop on the Messages API (`CLAUDE_MODEL`, default
+    `claude-opus-5-5`, with effort `CLAUDE_EFFORT`, default `low`).
+  - It uses twelve read-only tools that mirror the MCP contracts.
+  - Usernames are replaced by "you" and "opponent" before any tool result
+    leaves the machine.
+  - `CLAUDE_REFUSAL_FALLBACK=default` lets the API retry a refused turn on a
+    fallback model.
+- **Offline evidence.** Used when there is no key, or when `COACH_MODE=offline`
+  is set.
+  - The same tools run in a fixed plan: a position question gets Stockfish plus
+    the graph, a training question gets the coaching brief, and a game question
+    gets the largest mistakes plus a same-root comparison.
+  - The results are printed without a model and labelled as offline.
+
+The key stays in the API process. See [`backend/README.md`](backend/README.md).
 
 Other UI commands:
 

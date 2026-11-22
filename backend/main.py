@@ -7,15 +7,18 @@ rows, graph context, and a bounded Stockfish search. It does not explain.
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from neo4j.exceptions import Neo4jError
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from backend.coach import CoachProvider, CoachRequest, ToolContext, provider_from_settings
 from chess_mcp.config import get_chess_username, get_neo4j_settings, get_postgres_settings
 from chess_mcp.neo4j.repository import Neo4jRepository
 from chess_mcp.postgres.models import GameType, UserOutcome
@@ -48,6 +51,7 @@ def create_app(
     postgres: PostgresRepository | None = None,
     neo4j: Neo4jRepository | None = None,
     stockfish: StockfishService | None = None,
+    coach: CoachProvider | None = None,
 ) -> FastAPI:
     """Build the API. Injected repositories are for tests and are not closed here."""
 
@@ -70,6 +74,7 @@ def create_app(
     app.state.postgres = postgres
     app.state.neo4j = neo4j
     app.state.stockfish = stockfish
+    app.state.coach = coach
     app.state.owns_postgres = False
     app.state.owns_neo4j = False
     app.state.owns_stockfish = False
@@ -192,6 +197,39 @@ def create_app(
     ):
         selected = configured_player(player)
         return repo.get_training_plan(selected)
+
+    def coach_provider(request: Request) -> CoachProvider:
+        if request.app.state.coach is None:
+            request.app.state.coach = provider_from_settings()
+        return request.app.state.coach
+
+    @app.get("/api/coach/status")
+    def coach_status(provider: CoachProvider = Depends(coach_provider)):
+        return {"mode": provider.mode, "model": getattr(provider, "model", None)}
+
+    @app.post("/api/coach/chat")
+    def coach_chat(
+        body: CoachRequest,
+        request: Request,
+        provider: CoachProvider = Depends(coach_provider),
+    ):
+        """Stream the coach's answer as server-sent events (see backend/coach/providers.py)."""
+        ctx = ToolContext(
+            postgres=lambda: request.app.state.postgres,
+            neo4j=lambda: neo4j_repo(request),
+            stockfish=lambda: stockfish_service(request),
+            player=configured_player(None),
+        )
+
+        def events():
+            for event in provider.run(body, ctx):
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/player")
     def player(
