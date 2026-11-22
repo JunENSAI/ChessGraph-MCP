@@ -200,7 +200,7 @@ STOCKFISH_HASH_MB=128
 ```
 
 `STOCKFISH_DEPTH` remains a legacy fallback used when the MCP-specific default
-is absent. Keep Hermes tool timeouts above the maximum allowed engine time.
+is absent. Keep MCP host tool timeouts above the maximum allowed engine time.
 
 ## Extending safely
 

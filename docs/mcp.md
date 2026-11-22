@@ -7,7 +7,7 @@ ChessGraph exposes three independent, read-only MCP servers for local agents:
 - `chessgraph-stockfish-mcp` performs reproducible engine analysis.
 
 Each server uses the official Python MCP SDK v2 `MCPServer` API and the stdio
-transport. Stdio is intended for a trusted local MCP host such as Hermes-Agent.
+transport. Stdio is intended for a trusted local MCP host such as Claude Code.
 No server listens on a network port.
 
 ## Install
@@ -25,37 +25,26 @@ The three executables are installed in `.venv/bin/`. They must be launched by
 an MCP client because stdin and stdout carry protocol messages. Application
 logs are written to stderr.
 
-## Hermes-Agent
+## Claude Code
 
-Merge `agent/hermes-mcp.example.yaml` into `~/.hermes/config.yaml`. Adjust the
-absolute executable paths if the repository is elsewhere. Export the referenced
-credentials before starting Hermes; do not put real passwords in a committed
-configuration file.
+The servers are packaged as the Claude Code plugin in `plugins/chessgraph/`
+(see [`docs/plugin.md`](plugin.md)). The plugin starts each server with
+`uv run --directory <repo> chessgraph-<name>-mcp`, so the servers read the
+repository `.env` and no credential is written into the plugin.
 
-Hermes prefixes the tools with their server name. For example,
-`get_game_moves` from `chess_postgres` is registered as
-`mcp_chess_postgres_get_game_moves`.
+Claude Code prefixes plugin tools with the plugin and server name. For example,
+`get_game_moves` from the `postgres` server is
+`mcp__plugin_chessgraph_postgres__get_game_moves`.
 
 PostgreSQL and Neo4j tools may run in parallel. Stockfish calls must remain
 serialized because one persistent UCI process serves that MCP server.
 
-Identity seeds are in `agent/`. Copy them as described in `agent/README.md`.
-Hermes does not read `SOUL.md` or `memories/` from the repository.
+Check the servers without any model:
 
-The React coach calls Hermes through the Vite proxy at `/hermes-api`, which
-forwards to `HERMES_API_URL` (default `http://127.0.0.1:8642/v1`) and adds the
-`HERMES_API_KEY` bearer header server-side. The key must match
-`API_SERVER_KEY` in `~/.hermes/.env` and must never be exposed as a `VITE_`
-variable or read by the browser. The API server must be enabled
-(`platforms.api_server.enabled: true`) and binds to loopback only. A production
-build needs its own reverse proxy for `/hermes-api`.
-
-The proxy also strips `Origin` and `Referer`. The gateway API server answers
-`403` to any request that carries an `Origin` header (cross-origin browser
-callers are refused, and the preflight is refused too), while accepting the same
-request without one. Browsers always send `Origin` on a `POST`, so leaving it in
-place makes every coach request fail while `curl` succeeds. A `401` means a key
-mismatch; a `403` means the origin guard.
+```bash
+uv run chessgraph-status   # PostgreSQL, Neo4j and Stockfish reachable, with counts
+uv run chessgraph-smoke    # start each server over stdio, compare tool lists, call one tool
+```
 
 ## Local services
 
@@ -175,5 +164,5 @@ dedicated to this project.
   intentionally does not mutate database rows.
 - FEN not found: database lookups use the ETL's first four FEN fields
   (placement, turn, castling, en-passant).
-- Stockfish timeout: lower depth/MultiPV or raise the Hermes tool timeout within
+- Stockfish timeout: lower depth/MultiPV or raise the MCP host tool timeout within
   the local resource limits.

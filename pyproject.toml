@@ -21,6 +21,8 @@ dependencies = [
 chessgraph-postgres-mcp = "chess_mcp.postgres.server:main"
 chessgraph-neo4j-mcp = "chess_mcp.neo4j.server:main"
 chessgraph-stockfish-mcp = "chess_mcp.stockfish.server:main"
+chessgraph-smoke = "chess_mcp.smoke:main"
+chessgraph-status = "chess_mcp.status:main"
 
 [dependency-groups]
 dev = [
