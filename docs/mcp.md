@@ -88,23 +88,33 @@ run. User-perspective fields depend on `CHESS_USERNAME` at ETL time.
 
 ## Neo4j tools
 
-- `get_position_context`: retrieve a position and its classifications.
-- `get_position_moves`: compare personal and theory continuations.
-- `find_transpositions`: find bounded paths from a normalized position.
-- `get_game_blunders`: retrieve graph-linked mistakes for a game.
-- `get_recurring_blunder_positions`: find repeated high-loss positions.
-- `get_endgame_context`: retrieve endgame pattern and benchmark context.
+- `get_position_context`: a position with phase, material, average stored eval
+  (side to move), openings, endgame type and stored engine best move.
+- `get_position_moves`: theory moves and played moves, split by mover
+  (`by`: `all`, `theory`, `owner`, `opponent`), scored from the mover's side.
+- `find_transpositions`: bounded paths to positions reached by several move
+  orders.
+- `get_game_blunders`: the owner's mistakes in one game at or above
+  `min_severity` (`inaccuracy` 50 cp, `mistake` 100, `blunder` 300).
+- `get_recurring_blunder_positions`: positions where the owner went wrong in
+  several games.
+- `get_endgame_context`: endgame pattern and Endgame Atlas benchmarks.
+- `get_games_through_position`: the owner's games that reached a position, and
+  the owner's score from it.
+- `get_theory_exits`: where games leave opening theory, with which move and who
+  played it. `book_ended` marks positions where the opening data simply stops.
 
-The `chessgraph-neo4j://schema` resource documents labels, relationships, and
-ETL caveats. Traversals are anchored, parameterized, depth-capped, and
-result-capped. There is no arbitrary Cypher tool.
+The `chessgraph-neo4j://schema` resource documents graph schema v2: labels,
+relationships, properties and conventions. Traversals are anchored,
+parameterized, depth-capped, and result-capped. There is no arbitrary Cypher
+tool, and no tool returns usernames.
 
-Graph values reflect the current loader:
+Graph values reflect the loader in `etl/neo4j_db/`:
 
-- `visit_count` is not a global popularity count.
-- computed `material_sig` values may not match dataset `endgame_type` names.
-- `BLUNDERED_IN` identity includes the position endpoint, game endpoint, and
-  ply; repeated ETL syncs update the same event.
+- `visit_games` counts distinct games that reached a position.
+- `material_sig` and `EndgamePattern.endgame_type` share the Endgame Atlas
+  notation (White first), so equal strings mean the same material.
+- the graph has no clock fields: the stored games have no clock data.
 
 ## Stockfish tools
 

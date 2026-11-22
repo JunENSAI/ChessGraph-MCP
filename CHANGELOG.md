@@ -352,3 +352,175 @@ New tests:
   - streaming text, trace and phases from a stream split mid-event;
   - cache replay with its mode;
   - error event, 503 body, unreachable API, empty answer.
+
+## Batch 4: Stockfish backfill fix, read indexes, Neo4j graph v2
+
+### Why
+
+- The Stockfish backfill re-parsed PGN and, on a game it could not parse,
+  `break`-ed out of the move loop with the game still unevaluated, so the next
+  batch selected the same game again, forever.
+- The v1 graph mixed things up:
+  - `PLAYED_MOVE` merged your moves with your opponents' moves and scored both
+    from your side;
+  - `visit_count` was overwritten on one path and double-counted on reruns;
+  - `Position.eval_cp` mixed two sign conventions;
+  - `material_sig` put the side with more material first, while the Endgame
+    Atlas types put White first, so no game position ever linked to an
+    Atlas hub;
+  - `best_move_uci` was `MAX()` of the candidates, an opening's `eco_code` was
+    whichever line was written last, and nothing tied a game to the positions
+    it went through.
+
+### Changed
+
+**PostgreSQL (ETL only)**
+
+- `etl/postgres_db/load_stockfish_eval.py` is rewritten:
+  - it replays the stored `uci_move` values instead of re-parsing PGN;
+  - `evaluate_moves()` is pure: N + 1 searches for N plies (the score after
+    move *n* is the score before move *n + 1*), stored from the mover's side
+    with the existing convention (`cp_loss = max(0, before - after)`, mate
+    flattened to +/-10000);
+  - a game whose moves do not replay, or whose plies are not contiguous, is
+    logged and skipped for the rest of the run, so the loop always ends;
+  - each game is written in one transaction.
+- `etl/sql_files/migrations/001_read_indexes.sql` adds three indexes (no data
+  change): `game_moves(fen_after_norm)`, `lower(white_username)`,
+  `lower(black_username)`. They serve the position and player filters the
+  MCP tools already run. Applied to the local database after Junior approved.
+
+**Neo4j graph v2 (`etl/neo4j_db/`)**
+
+- The three v1 loaders are replaced by:
+  - `transform.py`: pure functions from PostgreSQL rows to graph rows
+    (`build_graph`), unit-tested without a database;
+  - `write.py`: batched `execute_write` statements, schema, `label_counts`,
+    and `reset_chess_graph`, which detach-deletes only the chess labels
+    with `CALL (n) { DETACH DELETE n } IN TRANSACTIONS`;
+  - `neo4j_load.py`: `--dry-run` (transform and print counts) and `--reset`.
+    It compares every non-chess label count before and after and exits with
+    status 2 if one changed.
+- Schema v2 (full table in `etl/neo4j_db/neo4j_init.md` and the
+  `chessgraph-neo4j://schema` resource):
+  - `Position` gains `phase` (simplified Lichess divider), `is_theory`,
+    `visit_games` (distinct games), `eval_cp` from the side to move with
+    `eval_samples`, the most frequent stored `best_move_uci` and its SAN;
+    `material_sig` is White first in Atlas order. `last_moved_piece` and
+    `last_move_san` are gone.
+  - `PLAYED_MOVE` is keyed by `(uci_move, by)` with `by` = `owner` or
+    `opponent`; results, `score_pct` and `avg_eval_after` are from the mover's
+    side; it adds `games` (distinct), `times`, severity counts and
+    `is_engine_best`.
+  - `THEORY_MOVE` keeps every ECO code in `eco_codes`.
+  - New: `Player`, `OpeningFamily`, `ChessGraphMeta`, `PLAYED_AS`, `REACHED`,
+    `OPENED_WITH`, `LEFT_THEORY_AT`, `ENTERED_ENDGAME`, `ENGINE_BEST`,
+    `IN_OPENING`, `IN_FAMILY`.
+  - `BLUNDERED_IN` becomes `MISTAKE_IN` with `severity` (inaccuracy 50,
+    mistake 100, blunder 300 cp), `mate_swing` and `best_uci`, for the owner's
+    moves only.
+  - Game positions of six pieces or fewer link to Atlas hubs
+    (`HAS_ENDGAME_TYPE {from_games: true}`); Atlas samples keep
+    `{benchmark: true}`.
+  - No clock fields: the stored PGN has no `%clk` comments.
+- Severity thresholds live once, in `chess_mcp/chess.py`
+  (`SEVERITY_MIN_CP`, `severity_for`), for the ETL and the tools.
+
+**Read side**
+
+- `chess_mcp/neo4j/` (repository, models, server) moves to schema v2:
+  - `get_position_context` adds phase, opening families, the number of theory
+    lines through the position and the engine best move;
+  - `get_position_moves` takes `by` (`all`, `theory`, `owner`, `opponent`)
+    and returns the position and its engine best move with the moves;
+  - `get_game_blunders` and `get_recurring_blunder_positions` take
+    `min_severity`; the recurring count is now distinct games;
+  - `find_transpositions` keeps one path per move sequence and counts distinct
+    predecessor positions, since a played move now has two edges;
+  - new tools `get_games_through_position` and `get_theory_exits`
+    (eight tools in all). The planned `get_opening_tree` was dropped: it is
+    `get_position_moves` with `by`;
+  - `get_position_moves` lists the most-played moves first, then book moves
+    ranked by how many ECO lines use them. Book-first ordering let the ~20 book
+    first moves fill the limit, so the offline coach told you the start
+    position was "not in your stored games" (you moved from it in 2,305);
+  - `get_theory_exits` flags `book_ended` when the opening data has no move
+    from the exit position (616 of 4,586 exits): the line ran out, it was not
+    left.
+- `normalize_fen` rebuilds the key with python-chess, so an en-passant square
+  with no legal capture (`... b KQkq e3` after 1.e4) is dropped the way the
+  ETL stores it. Before, such a FEN from a client missed the stored position.
+- The in-app coach gains `get_games_through_position` and `get_theory_exits`
+  (14 tools) and `get_position_moves` takes `by`. The offline position answer
+  makes two filtered reads (`by="owner"`, `by="theory"`) and counts only your
+  own moves as "your games".
+- `chessgraph-smoke` expects the eight Neo4j tools.
+- Plugin skills: `opening-check` starts from `get_theory_exits` and splits
+  moves by mover; `review-game` uses `get_games_through_position` and no longer
+  asks for clocks; `training-plan` adds recurring mistake positions.
+
+**Docs**: `etl/neo4j_db/neo4j_init.md` (load, schema v2, rules, verification
+queries), `chess_mcp/neo4j/README.md`, `docs/mcp.md`, `etl/README.md`,
+`README.md`, `data/README.md` (no clock data).
+
+### Tested
+
+| Command | Result |
+| --- | --- |
+| `uv run pytest` | 167 passed, 4 skipped (the opt-in integration tests) |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 4 passed, including the new v2 check against the loaded graph |
+| `uv run chessgraph-smoke` | postgres 9 tools, neo4j 8 tools, stockfish 3 tools: all PASS |
+| `uv run chessgraph-status` | 4,595 games, 388,522 moves (all evaluated); Position 360,182, Game 4,595, Opening 3,704, EndgamePattern 589; Stockfish 17.1 |
+| `claude plugin validate --strict plugins/chessgraph` | Validation passed |
+| `cd ui && npm test` | 72 passed (no UI change in this batch) |
+| `psql -f etl/sql_files/migrations/001_read_indexes.sql` | 3 × `CREATE INDEX`; the three indexes are listed in `pg_indexes` |
+| `uv run python etl/neo4j_db/neo4j_load.py --dry-run` | 35 s; row counts below |
+| `uv run python etl/neo4j_db/neo4j_load.py --reset` | exit 0 in about 3 minutes; "Non-chess labels unchanged (26 labels checked)" |
+| Live call of every graph tool | 4–260 ms each, `find_transpositions` up to depth 4 included |
+| Offline coach through `POST /api/coach/chat` on live stores | "you moved from here in 2305 games; most often d4 (1843 games, …)", book moves d4, e4, c4 |
+| Account-name scan of every changed file | no match |
+
+Before the reset, no node carried both a chess label and a non-chess label and
+no relationship ran from the chess graph to another project's nodes.
+
+Live graph after the load (each equals the dry-run row count):
+
+| Nodes | Count | Relationships | Count |
+| --- | ---: | --- | ---: |
+| Position | 360,182 | PLAYED_MOVE (owner 174,250, opponent 175,239) | 349,489 |
+| Game | 4,595 | REACHED (= 388,522 moves + 4,595 starts) | 393,117 |
+| Player (1 owner) | 3,959 | ENGINE_BEST | 130,894 |
+| Opening | 3,704 | MISTAKE_IN (22,262 / 19,301 / 7,695 by severity) | 49,258 |
+| OpeningFamily | 146 | IN_OPENING | 31,978 |
+| EndgamePattern | 589 | HAS_ENDGAME_TYPE (12,450 from games, to 297 hubs) | 19,555 |
+| ChessGraphMeta | 1 | THEORY_MOVE | 7,819 |
+| | | PLAYED_AS | 9,190 |
+| | | OPENED_WITH / LEFT_THEORY_AT / ENTERED_ENDGAME | 4,595 / 4,586 / 3,643 |
+
+v1 had 848 `EndgamePattern` nodes, because game positions created extra hubs
+under the wrong orientation; v2 has the 589 Atlas types, and 12,450 game
+positions link to them (v1: none). No `BLUNDERED_IN`, `visit_count` or
+`last_move_san` remains.
+
+New tests:
+
+- `tests/test_graph_transform.py` (30): material signature in Atlas order,
+  phase rule, severity, rating bands, legal replay, and `build_graph` on three
+  synthetic games: REACHED count, moves split and scored by mover, eval from
+  the side to move, ECO codes, game milestones, owner-only mistakes, engine
+  best edges, canonical players, game properties, opening families, endgame
+  links, deterministic reruns.
+- `tests/test_graph_write.py` (7, fake driver): every payload list has a write
+  step, statements name only chess labels and never delete, the reset touches
+  only chess labels, batching, flat meta properties, the non-chess label guard.
+- `tests/test_stockfish_eval_loader.py` (6): mover-side signs with N + 1
+  searches, unknown scores, ReplayError, game-over scoring without a search,
+  and the skip list ending the loop (in-memory SQLite).
+- Updated: `test_neo4j_repository.py` (v2 rows, filters, severity, new tools,
+  null `eco_codes`, en-passant key, move ordering), `test_neo4j_server.py`
+  (eight tools, schema text, delegation), `test_coach.py` (14 tools, mover
+  filter, offline answers), `test_chess.py` (en-passant key).
+
+### Found, not fixed here
+
+- `ruff` is not a project dependency, so no Python lint ran.

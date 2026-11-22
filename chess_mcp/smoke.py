@@ -96,6 +96,8 @@ CHECKS: dict[str, ServerCheck] = {
                 "get_game_blunders",
                 "get_recurring_blunder_positions",
                 "get_endgame_context",
+                "get_games_through_position",
+                "get_theory_exits",
             }
         ),
         call="get_position_context",

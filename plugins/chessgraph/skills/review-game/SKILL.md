@@ -16,8 +16,7 @@ Request: $ARGUMENTS
 3. **For each mistake, in order:**
    - Call `mcp__plugin_chessgraph_stockfish__compare_move` from `fen_before` with the played UCI move, using one depth for all three.
    - Report the played move, the engine move, both scores, and the centipawn loss the tool computed.
-   - Name the clock remaining when it is stored.
-   - Call `mcp__plugin_chessgraph_neo4j__get_position_moves` on the same FEN to show whether Junior has met this position before.
+   - Call `mcp__plugin_chessgraph_neo4j__get_games_through_position` on the same FEN to show whether Junior has met this position in other games, and Junior's score from it.
 4. **Validate before quoting.** Run `mcp__plugin_chessgraph_stockfish__validate_line` on any continuation longer than one move first.
 
 Finish with one lesson, the pattern behind the largest mistake, in positional terms. If no mistake of 100 cp or more is stored, say the game has no stored mistake above that threshold.

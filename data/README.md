@@ -49,7 +49,7 @@ Kh5 28. Qh7+ Kg5 29. Qg6# 1-0
 
 - **[TimeControl " "]** : the base time in seconds, plus the increment after a `+`. `600` is 10 minutes per player with no increment. `180+2` is 3 minutes plus 2 seconds per move. Daily (correspondence) games are written `1/86400`, meaning one move per 86400 seconds (one day).
 
-- **Clock comments** : live games also carry the remaining clock after each move as a comment, for example `1. e4 {[%clk 0:09:58.1]}`. The ETL stores it in `game_moves.clock_rem_sec`. The short example above has these comments stripped.
+- **Clock comments** : Chess.com can add the remaining clock after each move as a comment, for example `1. e4 {[%clk 0:09:58.1]}`, and the ETL would store it in `game_moves.clock_rem_sec`. The exports loaded here have no `%clk` comments, so `clock_rem_sec` is empty for every stored move and the Neo4j graph has no clock fields.
 
 - **[Termination " "]** : indicate how the game was ended. Like here the player with the white pieces has won by checkmate his/her opponent.
 

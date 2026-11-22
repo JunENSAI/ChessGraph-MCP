@@ -1,140 +1,195 @@
-"""Read-only Neo4j repository for the curated chess graph queries."""
+"""Read-only Neo4j repository for the curated chess graph queries (schema v2)."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from neo4j import GraphDatabase, READ_ACCESS
-from neo4j import Driver
+from neo4j import READ_ACCESS, Driver, GraphDatabase
 
-from chess_mcp.chess import clamp_limit, normalize_fen
+from chess_mcp.chess import SEVERITY_MIN_CP, clamp_limit, normalize_fen
 from chess_mcp.config import MAX_PATH_DEPTH, Neo4jSettings
 
 from .models import (
     EndgameContext,
     GameBlunders,
+    GamesThroughPosition,
     PositionContext,
     PositionMoves,
     RecurringBlunders,
+    TheoryExits,
     TranspositionResult,
 )
 
-
 MAX_RESULTS = 100
+MOVE_FILTERS = ("all", "theory", "owner", "opponent")
+EXIT_FILTERS = ("all", "owner", "opponent")
 
-POSITION_CONTEXT_CYPHER = """
-MATCH (p:Position {fen_norm: $fen_norm})
+
+def _position(var: str) -> str:
+    """Map projection of a Position node."""
+    return (
+        f"{var} {{ .fen_norm, .turn_color, .piece_count, .material_sig, .phase, .is_theory, "
+        f".eval_cp, .eval_samples, .best_move_uci, .best_move_san, "
+        f"visit_games: coalesce({var}.visit_games, 0) }}"
+    )
+
+
+def _game(var: str) -> str:
+    """Map projection of a Game node. Neo4j dates become ISO strings."""
+    return (
+        f"{var} {{ .game_id, .game_type, played_date: toString({var}.played_date), .user_color, "
+        f".user_elo, .opponent_elo, .rating_band, .user_outcome, .result, .termination, "
+        f".time_control, .eco_code, .opening_name, .total_plies }}"
+    )
+
+
+OPENING_FIELDS = ".epd_norm, .opening_id, .eco_volume, .eco_code, .opening_name, .family, .pgn_line, .uci_line"
+PATTERN_FIELDS = ".endgame_type, .piece_count, .benchmark_positions, .avg_player_elo, .sample_fen, .sample_human_move"
+MOVE_FIELDS = (
+    ".uci_move, .san_move, .by, .moved_piece, .from_square, .to_square, .promotion, .is_capture, "
+    ".is_check, .eco_codes, .games, .times, .wins, .draws, .losses, .score_pct, .avg_cp_loss, "
+    ".avg_eval_after, .inaccuracies, .mistakes, .blunders, .is_engine_best"
+)
+
+POSITION_CONTEXT_CYPHER = f"""
+MATCH (p:Position {{fen_norm: $fen_norm}})
 OPTIONAL MATCH (p)-[:CLASSIFIED_AS]->(o:Opening)
+WITH p, collect(DISTINCT o {{{OPENING_FIELDS}}}) AS openings
+OPTIONAL MATCH (p)-[:IN_OPENING]->(line:Opening)
+WITH p, openings, collect(DISTINCT line.family)[0..10] AS families, count(DISTINCT line) AS theory_lines
 OPTIONAL MATCH (p)-[:HAS_ENDGAME_TYPE]->(e:EndgamePattern)
-RETURN p {
-    .fen_norm, .turn_color, .piece_count, .material_sig,
-    .last_moved_piece, .last_move_san, .eval_cp, .best_move_uci,
-    visit_count: coalesce(p.visit_count, 0)
-} AS position,
-[item IN collect(DISTINCT o {
-    .epd_norm, .opening_id, .eco_volume, .eco_code, .opening_name,
-    .pgn_line, .uci_line
-}) WHERE item IS NOT NULL] AS openings,
-[item IN collect(DISTINCT e {
-    .endgame_type, .piece_count, .benchmark_positions, .avg_player_elo,
-    .sample_fen, .sample_human_move
-}) WHERE item IS NOT NULL] AS endgame_patterns
+WITH p, openings, families, theory_lines, collect(DISTINCT e {{{PATTERN_FIELDS}}}) AS patterns
+OPTIONAL MATCH (p)-[best:ENGINE_BEST]->(next:Position)
+RETURN {_position("p")} AS position,
+       openings,
+       families AS opening_families,
+       theory_lines,
+       patterns AS endgame_patterns,
+       CASE WHEN best IS NULL THEN null
+            ELSE {{uci: best.uci, san: best.san, target: {_position("next")}}} END AS engine_best
 """
 
-POSITION_MOVES_CYPHER = """
-MATCH (:Position {fen_norm: $fen_norm})-[r:PLAYED_MOVE|THEORY_MOVE]->(target:Position)
-RETURN type(r) AS relationship,
-r {
-    .uci_move, .san_move, .moved_piece, .from_square, .to_square,
-    .is_capture, .eco_code, .total_games, .wins, .losses, .draws,
-    .win_rate_pct, .avg_cp_loss, .avg_clock_sec, .best_move_uci
-} AS move,
-target {
-    .fen_norm, .turn_color, .piece_count, .material_sig,
-    .last_moved_piece, .last_move_san, .eval_cp, .best_move_uci,
-    visit_count: coalesce(target.visit_count, 0)
-} AS target
-ORDER BY coalesce(r.total_games, 0) DESC, r.san_move, r.uci_move
+POSITION_MOVES_CYPHER = f"""
+MATCH (p:Position {{fen_norm: $fen_norm}})
+OPTIONAL MATCH (p)-[best:ENGINE_BEST]->(next:Position)
+CALL (p) {{
+  OPTIONAL MATCH (p)-[r:PLAYED_MOVE|THEORY_MOVE]->(target:Position)
+  WHERE $by = 'all'
+     OR ($by = 'theory' AND type(r) = 'THEORY_MOVE')
+     OR (type(r) = 'PLAYED_MOVE' AND r.by = $by)
+  WITH r, target
+  // Most-played first; book moves (no games) follow, the ones more ECO lines use first.
+  // Use $by to select one kind.
+  ORDER BY coalesce(r.games, 0) DESC, CASE type(r) WHEN 'THEORY_MOVE' THEN 0 ELSE 1 END,
+           size(coalesce(r.eco_codes, [])) DESC, r.san_move, r.uci_move
+  LIMIT $limit
+  RETURN [item IN collect(CASE WHEN r IS NULL THEN null ELSE {{
+      relationship: type(r),
+      move: r {{{MOVE_FIELDS}}},
+      target: {_position("target")}
+  }} END) WHERE item IS NOT NULL] AS moves
+}}
+RETURN {_position("p")} AS position,
+       CASE WHEN best IS NULL THEN null
+            ELSE {{uci: best.uci, san: best.san, target: {_position("next")}}} END AS engine_best,
+       moves
+"""
+
+GAME_BLUNDERS_CYPHER = f"""
+MATCH (position:Position)-[m:MISTAKE_IN]->(game:Game {{game_id: $game_id}})
+WHERE m.cp_loss >= $min_cp
+RETURN {_position("position")} AS position,
+       {_game("game")} AS game,
+       m {{ .ply, .severity, .cp_loss, .mate_swing, .played_uci, .played_san, .best_uci }} AS mistake
+ORDER BY m.ply
 LIMIT $limit
 """
 
-GAME_BLUNDERS_CYPHER = """
-MATCH (position:Position)-[b:BLUNDERED_IN]->(game:Game {game_id: $game_id})
-RETURN position {
-    .fen_norm, .turn_color, .piece_count, .material_sig,
-    .last_moved_piece, .last_move_san, .eval_cp, .best_move_uci,
-    visit_count: coalesce(position.visit_count, 0)
-} AS position,
-game {
-    .game_id, .game_type, .played_date, .user_color, .user_elo,
-    .opponent_elo, .user_outcome, .result, .eco_code, .opening_name,
-    .total_plies
-} AS game,
-b {
-    .ply_number, .played_san, .played_uci, .moved_piece,
-    .best_move_uci, .cp_loss, .clock_rem_sec
-} AS blunder
-ORDER BY b.ply_number
+RECURRING_BLUNDERS_CYPHER = f"""
+MATCH (position:Position)-[m:MISTAKE_IN]->(game:Game)
+WHERE m.cp_loss >= $min_cp
+WITH position,
+     count(m) AS occurrences,
+     count(DISTINCT game) AS games,
+     avg(m.cp_loss) AS average_cp_loss,
+     max(m.cp_loss) AS max_cp_loss,
+     collect(DISTINCT m.played_san)[0..5] AS played_moves,
+     collect(DISTINCT game.game_id)[0..10] AS game_ids
+WHERE games >= $min_occurrences
+RETURN {_position("position")} AS position,
+       occurrences, games, average_cp_loss, max_cp_loss, played_moves, game_ids
+ORDER BY games DESC, average_cp_loss DESC
 LIMIT $limit
 """
 
-RECURRING_BLUNDERS_CYPHER = """
-MATCH (position:Position)-[b:BLUNDERED_IN]->(game:Game)
-WITH position, count(b) AS occurrences, count(DISTINCT game) AS games,
-     avg(b.cp_loss) AS average_cp_loss, max(b.cp_loss) AS max_cp_loss,
-     collect(DISTINCT game.game_id)[0..$limit] AS game_ids
-WHERE occurrences >= $min_occurrences
-RETURN position {
-    .fen_norm, .turn_color, .piece_count, .material_sig,
-    .last_moved_piece, .last_move_san, .eval_cp, .best_move_uci,
-    visit_count: coalesce(position.visit_count, 0)
-} AS position,
-occurrences, games, average_cp_loss, max_cp_loss, game_ids
-ORDER BY occurrences DESC, average_cp_loss DESC
-LIMIT $limit
-"""
-
-ENDGAME_CONTEXT_CYPHER = """
-MATCH (position:Position {fen_norm: $fen_norm})
+ENDGAME_CONTEXT_CYPHER = f"""
+MATCH (position:Position {{fen_norm: $fen_norm}})
 OPTIONAL MATCH (position)-[:HAS_ENDGAME_TYPE]->(pattern:EndgamePattern)
 WITH position,
-     [item IN collect(DISTINCT pattern {
-         .endgame_type, .piece_count, .benchmark_positions, .avg_player_elo,
-         .sample_fen, .sample_human_move
-     }) WHERE item IS NOT NULL] AS patterns,
-     [kind IN collect(DISTINCT pattern.endgame_type) WHERE kind IS NOT NULL]
-         AS pattern_types
-OPTIONAL MATCH (benchmark:Position)-[link:HAS_ENDGAME_TYPE]->(matched:EndgamePattern)
+     collect(DISTINCT pattern {{{PATTERN_FIELDS}}}) AS patterns,
+     collect(DISTINCT pattern.endgame_type) AS pattern_types
+OPTIONAL MATCH (benchmark:Position)-[link:HAS_ENDGAME_TYPE {{benchmark: true}}]->(matched:EndgamePattern)
 WHERE matched.endgame_type IN pattern_types
-RETURN position {
-    .fen_norm, .turn_color, .piece_count, .material_sig,
-    .last_moved_piece, .last_move_san, .eval_cp, .best_move_uci,
-    visit_count: coalesce(position.visit_count, 0)
-} AS position,
-patterns,
-[item IN collect(DISTINCT CASE
-    WHEN benchmark IS NULL THEN null
-    ELSE {
-        position: benchmark {
-            .fen_norm, .turn_color, .piece_count, .material_sig,
-            .last_moved_piece, .last_move_san, .eval_cp, .best_move_uci,
-            visit_count: coalesce(benchmark.visit_count, 0)
-        },
-        benchmark_move_uci: link.benchmark_move_uci,
-        elo_tier: link.elo_tier,
-        player_elo: link.player_elo
-    }
-END) WHERE item IS NOT NULL][0..$limit] AS benchmarks
+RETURN {_position("position")} AS position,
+       patterns,
+       [item IN collect(DISTINCT CASE WHEN benchmark IS NULL THEN null ELSE {{
+            position: {_position("benchmark")},
+            benchmark_move_uci: link.benchmark_move_uci,
+            elo_tier: link.elo_tier,
+            player_elo: link.player_elo
+       }} END) WHERE item IS NOT NULL][0..$limit] AS benchmarks
+"""
+
+GAMES_THROUGH_POSITION_CYPHER = f"""
+MATCH (:Position {{fen_norm: $fen_norm}})<-[r:REACHED]-(game:Game)
+// A game can reach one position twice (repetition): keep its first visit.
+WITH game, min(r.ply) AS ply, head(collect(r.owner_to_move)) AS owner_to_move
+ORDER BY game.played_date DESC, game.game_id DESC
+WITH collect({{game: {_game("game")}, ply: ply, owner_to_move: owner_to_move}}) AS visits
+RETURN size(visits) AS total_games,
+       size([v IN visits WHERE v.game.user_outcome = 'win']) AS owner_wins,
+       size([v IN visits WHERE v.game.user_outcome = 'draw']) AS owner_draws,
+       size([v IN visits WHERE v.game.user_outcome = 'loss']) AS owner_losses,
+       visits[0..$limit] AS games
+"""
+
+THEORY_EXITS_CYPHER = f"""
+MATCH (game:Game)-[r:LEFT_THEORY_AT]->(p:Position)
+WHERE $by = 'all' OR r.by = $by
+WITH p, r.by AS by, r.played_uci AS played_uci, r.played_san AS played_san,
+     min(r.ply) AS ply, collect(game.user_outcome) AS outcomes
+WITH p, by, played_uci, played_san, ply, outcomes, size(outcomes) AS games
+ORDER BY games DESC, ply, played_uci
+LIMIT $limit
+OPTIONAL MATCH (p)-[:CLASSIFIED_AS]->(exact:Opening)
+OPTIONAL MATCH (p)-[:IN_OPENING]->(line:Opening)
+OPTIONAL MATCH (p)-[book:THEORY_MOVE]->(:Position)
+WITH p, by, played_uci, played_san, ply, outcomes, games,
+     head(collect(DISTINCT exact.opening_name)) AS opening,
+     collect(DISTINCT line.family)[0..3] AS families,
+     collect(DISTINCT book.san_move) AS theory_moves
+RETURN {_position("p")} AS position,
+       by, played_uci, played_san, ply, games,
+       size([o IN outcomes WHERE o = 'win']) AS owner_wins,
+       size([o IN outcomes WHERE o = 'draw']) AS owner_draws,
+       size([o IN outcomes WHERE o = 'loss']) AS owner_losses,
+       opening, families AS opening_families, theory_moves,
+       size(theory_moves) = 0 AS book_ended
+ORDER BY games DESC, ply, played_uci
 """
 
 
 def _record_data(record: Any) -> dict[str, Any]:
     if hasattr(record, "data"):
         return dict(record.data())
-    if isinstance(record, Mapping):
-        return dict(record)
     return dict(record)
+
+
+def _min_cp(min_severity: str) -> int:
+    if min_severity not in SEVERITY_MIN_CP:
+        raise ValueError(f"min_severity must be one of {', '.join(SEVERITY_MIN_CP)}")
+    return SEVERITY_MIN_CP[min_severity]
 
 
 class Neo4jRepository:
@@ -148,10 +203,7 @@ class Neo4jRepository:
 
     @classmethod
     def from_settings(cls, settings: Neo4jSettings) -> Neo4jRepository:
-        driver = GraphDatabase.driver(
-            settings.uri,
-            auth=(settings.user, settings.password),
-        )
+        driver = GraphDatabase.driver(settings.uri, auth=(settings.user, settings.password))
         return cls(driver, settings)
 
     def close(self) -> None:
@@ -161,10 +213,7 @@ class Neo4jRepository:
         def run(tx: Any) -> list[dict[str, Any]]:
             return [_record_data(record) for record in tx.run(query, dict(parameters))]
 
-        with self._driver.session(
-            database=self._database,
-            default_access_mode=READ_ACCESS,
-        ) as session:
+        with self._driver.session(database=self._database, default_access_mode=READ_ACCESS) as session:
             return session.execute_read(run)
 
     def get_position_context(self, fen: str) -> PositionContext:
@@ -174,29 +223,21 @@ class Neo4jRepository:
             raise LookupError(f"Position is not present in the graph: {fen_norm}")
         return PositionContext.model_validate(rows[0])
 
-    def get_position_moves(self, fen: str, limit: int = 20) -> PositionMoves:
+    def get_position_moves(self, fen: str, limit: int = 20, by: str = "all") -> PositionMoves:
         fen_norm = normalize_fen(fen)
+        if by not in MOVE_FILTERS:
+            raise ValueError(f"by must be one of {', '.join(MOVE_FILTERS)}")
         bounded_limit = clamp_limit(limit, self.max_results)
-        rows = self._read(
-            POSITION_MOVES_CYPHER,
-            {"fen_norm": fen_norm, "limit": bounded_limit},
+        rows = self._read(POSITION_MOVES_CYPHER, {"fen_norm": fen_norm, "limit": bounded_limit, "by": by})
+        if not rows:
+            return PositionMoves(fen_norm=fen_norm, by=by)  # type: ignore[arg-type]
+        row = rows[0]
+        moves = [{"relationship": item["relationship"], **item["move"], "target": item["target"]} for item in row["moves"]]
+        return PositionMoves.model_validate(
+            {"fen_norm": fen_norm, "by": by, "position": row["position"], "engine_best": row["engine_best"], "moves": moves}
         )
-        moves = [
-            {
-                "relationship": row["relationship"],
-                **row["move"],
-                "target": row["target"],
-            }
-            for row in rows
-        ]
-        return PositionMoves(fen_norm=fen_norm, moves=moves)
 
-    def find_transpositions(
-        self,
-        fen: str,
-        max_depth: int = 3,
-        limit: int = 20,
-    ) -> TranspositionResult:
+    def find_transpositions(self, fen: str, max_depth: int = 3, limit: int = 20) -> TranspositionResult:
         fen_norm = normalize_fen(fen)
         if max_depth < 1:
             raise ValueError("max_depth must be at least 1")
@@ -207,12 +248,16 @@ class Neo4jRepository:
         # bounded_depth is validated and clamped to the integer whitelist 1..4.
         if bounded_depth not in range(1, MAX_PATH_DEPTH + 1):
             raise ValueError("max_depth must resolve to an integer from 1 through 4")
+        # PLAYED_MOVE has one edge per mover (owner, opponent), so the same move
+        # sequence can appear as several paths: keep one per sequence. A target
+        # is convergent when at least two distinct positions lead to it.
         query = f"""
 MATCH path = (source:Position {{fen_norm: $fen_norm}})
              -[:PLAYED_MOVE|THEORY_MOVE*1..{bounded_depth}]->
              (target:Position)
 WHERE source <> target
-  AND COUNT {{ (target)<-[:PLAYED_MOVE|THEORY_MOVE]-(:Position) }} > 1
+  AND COUNT {{ MATCH (prev:Position)-[:PLAYED_MOVE|THEORY_MOVE]->(target) RETURN DISTINCT prev }} > 1
+WITH source, target, [rel IN relationships(path) | rel.uci_move] AS sequence, collect(path)[0] AS path
 RETURN source.fen_norm AS source_fen,
        target.fen_norm AS target_fen,
        length(path) AS depth,
@@ -221,68 +266,62 @@ RETURN source.fen_norm AS source_fen,
            uci_move: rel.uci_move,
            san_move: rel.san_move
        }}] AS moves
-ORDER BY depth, source_fen
+ORDER BY depth, target_fen
 LIMIT $limit
 """
-        rows = self._read(
-            query,
-            {"fen_norm": fen_norm, "limit": bounded_limit},
-        )
-        return TranspositionResult(
-            fen_norm=fen_norm,
-            max_depth=bounded_depth,
-            paths=rows,
-        )
+        rows = self._read(query, {"fen_norm": fen_norm, "limit": bounded_limit})
+        return TranspositionResult(fen_norm=fen_norm, max_depth=bounded_depth, paths=rows)  # type: ignore[arg-type]
 
-    def get_game_blunders(self, game_id: int, limit: int = 100) -> GameBlunders:
+    def get_game_blunders(self, game_id: int, limit: int = 100, min_severity: str = "mistake") -> GameBlunders:
         if game_id < 1:
             raise ValueError("game_id must be a positive integer")
+        min_cp = _min_cp(min_severity)
         bounded_limit = clamp_limit(limit, self.max_results)
-        rows = self._read(
-            GAME_BLUNDERS_CYPHER,
-            {"game_id": game_id, "limit": bounded_limit},
-        )
-        blunders = [
+        rows = self._read(GAME_BLUNDERS_CYPHER, {"game_id": game_id, "limit": bounded_limit, "min_cp": min_cp})
+        return GameBlunders.model_validate(
             {
-                "position": row["position"],
-                "game": row["game"],
-                **row["blunder"],
+                "game_id": game_id,
+                "min_severity": min_severity,
+                "game": rows[0]["game"] if rows else None,
+                "blunders": [{"position": row["position"], **row["mistake"]} for row in rows],
             }
-            for row in rows
-        ]
-        return GameBlunders(game_id=game_id, blunders=blunders)
+        )
 
     def get_recurring_blunder_positions(
         self,
         min_occurrences: int = 2,
         limit: int = 20,
+        min_severity: str = "mistake",
     ) -> RecurringBlunders:
         if min_occurrences < 2:
             raise ValueError("min_occurrences must be at least 2")
+        min_cp = _min_cp(min_severity)
         bounded_limit = clamp_limit(limit, self.max_results)
         rows = self._read(
             RECURRING_BLUNDERS_CYPHER,
-            {
-                "min_occurrences": min_occurrences,
-                "limit": bounded_limit,
-            },
+            {"min_occurrences": min_occurrences, "limit": bounded_limit, "min_cp": min_cp},
         )
-        return RecurringBlunders(
-            min_occurrences=min_occurrences,
-            positions=rows,
+        return RecurringBlunders.model_validate(
+            {"min_occurrences": min_occurrences, "min_severity": min_severity, "positions": rows}
         )
 
-    def get_endgame_context(
-        self,
-        fen: str,
-        limit: int = 20,
-    ) -> EndgameContext:
+    def get_endgame_context(self, fen: str, limit: int = 20) -> EndgameContext:
         fen_norm = normalize_fen(fen)
         bounded_limit = clamp_limit(limit, self.max_results)
-        rows = self._read(
-            ENDGAME_CONTEXT_CYPHER,
-            {"fen_norm": fen_norm, "limit": bounded_limit},
-        )
+        rows = self._read(ENDGAME_CONTEXT_CYPHER, {"fen_norm": fen_norm, "limit": bounded_limit})
         if not rows:
             raise LookupError(f"Position is not present in the graph: {fen_norm}")
         return EndgameContext.model_validate(rows[0])
+
+    def get_games_through_position(self, fen: str, limit: int = 20) -> GamesThroughPosition:
+        fen_norm = normalize_fen(fen)
+        bounded_limit = clamp_limit(limit, self.max_results)
+        rows = self._read(GAMES_THROUGH_POSITION_CYPHER, {"fen_norm": fen_norm, "limit": bounded_limit})
+        return GamesThroughPosition.model_validate({"fen_norm": fen_norm, **(rows[0] if rows else {})})
+
+    def get_theory_exits(self, limit: int = 20, by: str = "owner") -> TheoryExits:
+        if by not in EXIT_FILTERS:
+            raise ValueError(f"by must be one of {', '.join(EXIT_FILTERS)}")
+        bounded_limit = clamp_limit(limit, self.max_results)
+        rows = self._read(THEORY_EXITS_CYPHER, {"limit": bounded_limit, "by": by})
+        return TheoryExits.model_validate({"by": by, "exits": rows})

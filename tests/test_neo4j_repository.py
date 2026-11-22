@@ -11,9 +11,11 @@ from chess_mcp.config import Neo4jSettings
 from chess_mcp.neo4j.models import (
     EndgameContext,
     GameBlunders,
+    GamesThroughPosition,
     PositionContext,
     PositionMoves,
     RecurringBlunders,
+    TheoryExits,
     TranspositionResult,
 )
 from chess_mcp.neo4j.repository import Neo4jRepository
@@ -97,7 +99,7 @@ def settings() -> Neo4jSettings:
 
 
 def position(fen: str = START_FEN) -> dict[str, Any]:
-    return {"fen_norm": fen, "visit_count": 3}
+    return {"fen_norm": fen, "visit_games": 3, "phase": "opening"}
 
 
 def test_position_context_normalizes_fen_and_uses_read_transaction() -> None:
@@ -132,27 +134,60 @@ def test_position_context_normalizes_fen_and_uses_read_transaction() -> None:
     assert driver.sessions[0].execute_read_called
 
 
-def test_position_moves_caps_limit_at_one_hundred() -> None:
+def test_position_moves_caps_limit_and_flattens_v2_rows() -> None:
+    target = position("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -")
     driver = FakeDriver(
         [
             [
                 {
-                    "relationship": "PLAYED_MOVE",
-                    "move": {"uci_move": "e2e4", "san_move": "e4"},
-                    "target": position(
-                        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -"
-                    ),
+                    "position": position(),
+                    "engine_best": {"uci": "e2e4", "san": "e4", "target": target},
+                    "moves": [
+                        {
+                            "relationship": "PLAYED_MOVE",
+                            "move": {"uci_move": "e2e4", "san_move": "e4", "by": "owner", "games": 12, "score_pct": 62.5, "eco_codes": None},
+                            "target": target,
+                        },
+                        {
+                            "relationship": "THEORY_MOVE",
+                            "move": {"uci_move": "e2e4", "san_move": "e4", "eco_codes": ["B00", "C20"]},
+                            "target": target,
+                        },
+                    ],
                 }
             ]
         ]
     )
     repository = Neo4jRepository(driver, settings())  # type: ignore[arg-type]
 
-    result = repository.get_position_moves(START_FEN, limit=999)
+    result = repository.get_position_moves(START_FEN, limit=999, by="owner")
 
     assert isinstance(result, PositionMoves)
-    assert result.moves[0].uci_move == "e2e4"
-    assert driver.calls[0][1]["limit"] == 100
+    assert result.moves[0].by == "owner"
+    assert result.moves[0].score_pct == 62.5
+    assert result.moves[0].eco_codes == []  # played edges project eco_codes as null
+    assert result.moves[1].eco_codes == ["B00", "C20"]
+    assert result.engine_best is not None and result.engine_best.san == "e4"
+    assert driver.calls[0][1] == {"fen_norm": START_FEN, "limit": 100, "by": "owner"}
+
+
+def test_position_moves_of_an_unknown_position_is_empty() -> None:
+    repository = Neo4jRepository(FakeDriver([[]]), settings())  # type: ignore[arg-type]
+    result = repository.get_position_moves(START_FEN)
+    assert result.moves == [] and result.position is None
+
+
+def test_position_moves_rejects_an_unknown_mover_filter() -> None:
+    repository = Neo4jRepository(FakeDriver([]), settings())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="by must be one of"):
+        repository.get_position_moves(START_FEN, by="everyone")
+
+
+def test_lookup_key_drops_an_en_passant_square_with_no_legal_capture() -> None:
+    driver = FakeDriver([[]])
+    repository = Neo4jRepository(driver, settings())  # type: ignore[arg-type]
+    repository.get_position_moves("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1")
+    assert driver.calls[0][1]["fen_norm"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -"
 
 
 def test_transposition_depth_is_whitelisted_before_interpolation() -> None:
@@ -186,17 +221,20 @@ def test_transposition_depth_is_whitelisted_before_interpolation() -> None:
     assert parameters == {"fen_norm": START_FEN, "limit": 100}
 
 
-def test_game_blunders_returns_typed_events() -> None:
+def test_game_blunders_filter_by_severity_and_return_typed_events() -> None:
     driver = FakeDriver(
         [
             [
                 {
                     "position": position(),
-                    "game": {"game_id": 7, "result": "0-1"},
-                    "blunder": {
-                        "ply_number": 14,
+                    "game": {"game_id": 7, "result": "0-1", "played_date": "2025-03-01"},
+                    "mistake": {
+                        "ply": 14,
+                        "severity": "blunder",
+                        "cp_loss": 9600,
+                        "mate_swing": True,
                         "played_uci": "f2f3",
-                        "cp_loss": 250,
+                        "best_uci": "g1f3",
                     },
                 }
             ]
@@ -204,11 +242,79 @@ def test_game_blunders_returns_typed_events() -> None:
     )
     repository = Neo4jRepository(driver, settings())  # type: ignore[arg-type]
 
-    result = repository.get_game_blunders(7)
+    result = repository.get_game_blunders(7, min_severity="blunder")
 
     assert isinstance(result, GameBlunders)
-    assert result.blunders[0].cp_loss == 250
-    assert driver.calls[0][1]["game_id"] == 7
+    assert result.game is not None and result.game.played_date == "2025-03-01"
+    assert result.blunders[0].severity == "blunder"
+    assert result.blunders[0].mate_swing is True
+    assert driver.calls[0][1] == {"game_id": 7, "limit": 100, "min_cp": 300}
+
+
+def test_game_blunders_rejects_an_unknown_severity() -> None:
+    repository = Neo4jRepository(FakeDriver([]), settings())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="min_severity"):
+        repository.get_game_blunders(7, min_severity="catastrophe")
+
+
+def test_games_through_position_summarises_the_owner_score() -> None:
+    driver = FakeDriver(
+        [
+            [
+                {
+                    "total_games": 3,
+                    "owner_wins": 2,
+                    "owner_draws": 0,
+                    "owner_losses": 1,
+                    "games": [{"game": {"game_id": 9, "user_outcome": "win"}, "ply": 6, "owner_to_move": True}],
+                }
+            ]
+        ]
+    )
+    repository = Neo4jRepository(driver, settings())  # type: ignore[arg-type]
+
+    result = repository.get_games_through_position(START_FEN, limit=1)
+
+    assert isinstance(result, GamesThroughPosition)
+    assert (result.total_games, result.owner_wins, result.owner_losses) == (3, 2, 1)
+    assert result.games[0].game.game_id == 9
+    assert driver.calls[0][1] == {"fen_norm": START_FEN, "limit": 1}
+
+
+def test_theory_exits_are_typed_and_the_mover_filter_is_checked() -> None:
+    driver = FakeDriver(
+        [
+            [
+                {
+                    "position": position(),
+                    "by": "owner",
+                    "played_uci": "g2g3",
+                    "played_san": "g3",
+                    "ply": 1,
+                    "games": 40,
+                    "owner_wins": 20,
+                    "owner_draws": 5,
+                    "owner_losses": 15,
+                    "opening": None,
+                    "opening_families": ["King's Fianchetto Opening"],
+                    "theory_moves": ["e4", "d4"],
+                    "book_ended": False,
+                }
+            ]
+        ]
+    )
+    repository = Neo4jRepository(driver, settings())  # type: ignore[arg-type]
+
+    result = repository.get_theory_exits(limit=5)
+
+    assert isinstance(result, TheoryExits)
+    assert result.exits[0].played_san == "g3"
+    assert result.exits[0].theory_moves == ["e4", "d4"]
+    assert result.exits[0].book_ended is False
+    assert "size(theory_moves) = 0 AS book_ended" in driver.calls[0][0]
+    assert driver.calls[0][1] == {"limit": 5, "by": "owner"}
+    with pytest.raises(ValueError, match="by must be one of"):
+        repository.get_theory_exits(by="theory")
 
 
 def test_recurring_blunders_rejects_non_recurring_threshold() -> None:
@@ -257,6 +363,8 @@ def test_recurring_blunders_and_endgame_context_are_typed() -> None:
 
     assert isinstance(recurring, RecurringBlunders)
     assert recurring.positions[0].occurrences == 4
+    assert recurring.min_severity == "mistake"
+    assert driver.calls[0][1] == {"min_occurrences": 2, "limit": 20, "min_cp": 100}
     assert isinstance(endgame, EndgameContext)
     assert endgame.patterns[0].endgame_type == "KRvK"
 
@@ -266,3 +374,11 @@ def test_missing_position_is_reported() -> None:
 
     with pytest.raises(LookupError, match="not present"):
         repository.get_position_context(START_FEN)
+
+
+def test_position_moves_sort_by_games_before_book_moves() -> None:
+    from chess_mcp.neo4j.repository import POSITION_MOVES_CYPHER
+
+    order = POSITION_MOVES_CYPHER[POSITION_MOVES_CYPHER.index("ORDER BY") :]
+    assert order.index("coalesce(r.games, 0) DESC") < order.index("THEORY_MOVE")
+    assert order.index("THEORY_MOVE") < order.index("size(coalesce(r.eco_codes, [])) DESC") < order.index("r.san_move")

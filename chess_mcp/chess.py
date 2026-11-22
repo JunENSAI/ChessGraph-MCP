@@ -25,8 +25,14 @@ def parse_board(fen: str) -> chess.Board:
 
 
 def normalize_fen(fen: str) -> str:
-    """Return the four-field FEN key used by the PostgreSQL and Neo4j ETL."""
-    return " ".join(full_fen(fen).split()[:4])
+    """Return the four-field FEN key used by the PostgreSQL and Neo4j ETL.
+
+    The ETL writes keys with python-chess, which keeps an en-passant square
+    only when a capture there is legal, so the key is rebuilt the same way:
+    ``... b KQkq e3`` after 1.e4 becomes ``... b KQkq -``.
+    """
+    board = parse_board(fen)
+    return " ".join(board.fen(en_passant="legal").split()[:4])
 
 
 def clamp_limit(value: int, maximum: int, *, minimum: int = 1) -> int:
@@ -34,3 +40,19 @@ def clamp_limit(value: int, maximum: int, *, minimum: int = 1) -> int:
     if value < minimum:
         raise ValueError(f"limit must be at least {minimum}")
     return min(value, maximum)
+
+
+# Move severity by stored centipawn loss (mover's side). The graph ETL labels
+# MISTAKE_IN edges with these thresholds and the Neo4j tools filter by them.
+SEVERITY_MIN_CP = {"inaccuracy": 50, "mistake": 100, "blunder": 300}
+
+
+def severity_for(cp_loss: int | None) -> str | None:
+    """The severity label of a centipawn loss, or None below an inaccuracy."""
+    if cp_loss is None:
+        return None
+    label = None
+    for name, threshold in SEVERITY_MIN_CP.items():
+        if cp_loss >= threshold:
+            label = name
+    return label
