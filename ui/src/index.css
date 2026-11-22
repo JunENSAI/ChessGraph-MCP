@@ -627,6 +627,11 @@ p {
   color: var(--lime);
 }
 
+.trace-step.failed {
+  color: var(--red);
+  text-decoration: line-through;
+}
+
 .trace-step.current {
   background: var(--blue-soft);
   color: var(--blue);
@@ -653,6 +658,11 @@ p {
   border: 1px solid var(--line-strong);
   border-radius: 12px 12px 3px 12px;
   background: var(--surface-3);
+}
+
+.message.coach p {
+  /* Coach answers are line-based (EVAL, MOVE, tasks): keep their breaks. */
+  white-space: pre-line;
 }
 
 .message.coach {

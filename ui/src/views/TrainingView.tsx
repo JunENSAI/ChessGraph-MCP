@@ -621,7 +621,7 @@ export function TrainingView() {
             : reading
               ? coach.phase === 'idle'
                 ? 'Clock paused — press Continue when you have read it'
-                : 'Clock paused while Hermes explains'
+                : 'Clock paused while the coach explains'
               : gameStatus(fen) ?? `${sideToMove(fen) === 'w' ? 'White' : 'Black'} to move`
 
   return (
@@ -743,11 +743,13 @@ export function TrainingView() {
       </section>
 
       <CoachPanel
-        title="Hermes trainer"
+        title="Coach"
         subtitle="Evaluation, the move, and a short reason"
         messages={coach.messages}
         phase={coach.phase}
-        prompts={['Why this move?', 'What is the plan?', 'Common mistakes here']}
+        trace={coach.trace}
+        mode={coach.mode}
+        prompts={['Why this move?', 'What is the plan?', 'What should I train?']}
         onAsk={question => {
           const fromFen = fenRef.current
           const playing = Boolean(session?.enginePlay || againstEngine)

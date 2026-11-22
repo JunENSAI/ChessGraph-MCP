@@ -5,9 +5,16 @@ data from the FastAPI retrieval API in `backend/`. The Vite dev and preview
 servers proxy `/api` to `BACKEND_URL` (default `http://127.0.0.1:8000`). There
 is no demo or sample data in the interface.
 
-The coach panel sends questions to the agent gateway through a server-side
-proxy, so no model key ever reaches the browser or the bundle. Never expose a
-key through a `VITE_` variable. `npm run build` emits static files only, so a
+The coach panel posts to `POST /api/coach/chat` and reads the answer as a
+server-sent event stream (`src/services/coach.ts`).
+
+- The text appears as it arrives.
+- The Games, Graph and Stockfish chips light up as each tool runs: green when
+  it answered, struck through when it failed.
+- The header says whether Claude or the offline evidence mode answered.
+
+The model key lives only in the API process. Never expose a key through a
+`VITE_` variable. `npm run build` emits static files only, so a
 production deployment needs its own reverse proxy for `/api`.
 
 ## Run

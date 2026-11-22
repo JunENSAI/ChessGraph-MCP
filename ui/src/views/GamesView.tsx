@@ -658,11 +658,13 @@ export function GamesView({ active }: { active: boolean }) {
 
       <CoachPanel
         className="review-coach"
-        title="Hermes review"
+        title="Game review"
         subtitle="Evaluation, the move, and a short reason"
         messages={coach.messages}
         phase={coach.phase}
-        prompts={['Why was this a mistake?', 'Show my usual plan', 'Similar positions']}
+        trace={coach.trace}
+        mode={coach.mode}
+        prompts={['Why was this a mistake?', 'Why did I lose?', 'What should I play here?']}
         onAsk={question => {
           const fromFen = fen
           void coach
@@ -670,6 +672,7 @@ export function GamesView({ active }: { active: boolean }) {
               mode: 'review',
               fen: fromFen,
               summary: game ? `${game.opening}, ${moveLabel}` : 'game',
+              gameId: game?.id,
             })
             .then(reply => {
               const fix = correction()

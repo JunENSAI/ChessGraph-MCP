@@ -1,7 +1,7 @@
 # Claude Code plugin
 
 `plugins/chessgraph/` packages ChessGraph for Claude Code. It replaces the old
-Hermes-Agent setup (`agent/` seeds and `hermes-mcp.example.yaml`).
+Hermes-Agent setup. The in-app coach is separate: it runs in the API (`backend/coach/`).
 
 ```text
 plugins/chessgraph/

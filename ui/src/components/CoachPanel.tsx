@@ -5,9 +5,11 @@ import { ThinkingOrb } from 'thinking-orbs'
 import {
   PHASE_LABEL,
   PHASE_ORB,
-  PHASE_TRACE,
+  TRACE_SOURCES,
   type CoachMessage,
+  type CoachMode,
   type CoachPhase,
+  type CoachTrace,
 } from '../services/coach'
 
 interface CoachPanelProps {
@@ -15,14 +17,33 @@ interface CoachPanelProps {
   subtitle: string
   messages: CoachMessage[]
   phase: CoachPhase
+  trace?: CoachTrace
+  mode?: CoachMode | null
   prompts: string[]
   onAsk: (question: string) => void
   className?: string
 }
 
-const SOURCE_LABELS = { postgres: 'Postgres', neo4j: 'Neo4j', stockfish: 'Stockfish', composing: 'Hermes' }
+const SOURCE_LABELS = { postgres: 'Games', neo4j: 'Graph', stockfish: 'Stockfish' }
+const MODE_LABEL: Record<CoachMode, string> = { claude: 'Claude', offline: 'Offline evidence' }
 
-export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, className = '' }: CoachPanelProps) {
+function authorFor(message: CoachMessage): string {
+  if (message.mode === 'claude') return 'Claude'
+  if (message.mode === 'offline') return 'Coach · offline'
+  return 'Coach'
+}
+
+export function CoachPanel({
+  title,
+  subtitle,
+  messages,
+  phase,
+  trace = {},
+  mode = null,
+  prompts,
+  onAsk,
+  className = '',
+}: CoachPanelProps) {
   const [draft, setDraft] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const busy = phase !== 'idle'
@@ -52,15 +73,19 @@ export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, c
         <div className="agent-orb">
           <ThinkingOrb state={PHASE_ORB[phase]} size={20} theme="dark" color="#b8f05a" />
           <span>
-            <strong>Hermes</strong> · {PHASE_LABEL[phase]}
+            <strong>{mode ? MODE_LABEL[mode] : 'Coach'}</strong> · {PHASE_LABEL[phase]}
           </span>
         </div>
-        <ol className="trace" aria-label="Evidence sources">
-          {PHASE_TRACE.map(step => (
-            <li key={step} className={`trace-step${step === phase ? ' current' : ''}`}>
-              {SOURCE_LABELS[step]}
-            </li>
-          ))}
+        <ol className="trace" aria-label="Evidence sources used for the last answer">
+          {TRACE_SOURCES.map(step => {
+            const state = trace[step]
+            const current = step === phase ? ' current' : ''
+            return (
+              <li key={step} className={`trace-step${current}${state ? ` ${state}` : ''}`} title={state ?? 'not used'}>
+                {SOURCE_LABELS[step]}
+              </li>
+            )
+          })}
         </ol>
       </div>
 
@@ -75,10 +100,9 @@ export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, c
               exit={{ opacity: 0, transition: { duration: 0.08 } }}
               transition={{ duration: 0.2 }}
             >
-              {message.role === 'coach' && <div className="message-author">Hermes</div>}
-              <p>{message.text}</p>
+              {message.role === 'coach' && <div className="message-author">{authorFor(message)}</div>}
+              <p>{message.pending && !message.text ? '…' : message.text}</p>
               {message.cached && <div className="demo-note">Cached reply</div>}
-              {message.demo && <div className="demo-note">Demo reply · connect Hermes-Agent for MCP evidence</div>}
             </motion.article>
           ))}
         </AnimatePresence>
@@ -94,13 +118,13 @@ export function CoachPanel({ title, subtitle, messages, phase, prompts, onAsk, c
         </div>
         <form className="composer" onSubmit={submit}>
           <label className="sr-only" htmlFor={`${title}-input`}>
-            Ask Hermes
+            Ask the coach
           </label>
           <input
             id={`${title}-input`}
             value={draft}
             onChange={event => setDraft(event.target.value)}
-            placeholder="Ask Hermes about this position…"
+            placeholder="Ask the coach about this position…"
             autoComplete="off"
           />
           <button type="submit" className="send" disabled={busy || !draft.trim()} aria-label="Send">

@@ -66,7 +66,7 @@ export function buildGameGraph(game: {
       kind: isMistake ? 'mistake' : isUser ? 'user' : 'opponent',
       ply,
       fen: fenAfter,
-      description: isMistake ? 'Key moment reviewed by Hermes' : isUser ? 'Your move' : 'Opponent move',
+      description: isMistake ? 'Key moment: your largest stored loss' : isUser ? 'Your move' : 'Opponent move',
     })
     links.push({ source: `ply-${ply - 1}`, target: `ply-${ply}`, kind: 'played' })
   })
