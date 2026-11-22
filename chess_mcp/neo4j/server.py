@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -13,6 +15,7 @@ from mcp.types import ToolAnnotations
 from neo4j.exceptions import Neo4jError
 
 from chess_mcp.config import get_neo4j_settings
+from chess_mcp.errors import tool_failure
 
 from .models import (
     EndgameContext,
@@ -77,6 +80,7 @@ READ_ONLY = ToolAnnotations(
     openWorldHint=False,
 )
 
+logger = logging.getLogger(__name__)
 ResultT = TypeVar("ResultT")
 _default_repository: Neo4jRepository | None = None
 
@@ -94,7 +98,7 @@ def _invoke(operation: Callable[[], ResultT]) -> ResultT:
     except (ValueError, LookupError) as exc:
         raise ToolError(str(exc)) from exc
     except Neo4jError as exc:
-        raise ToolError("Neo4j could not complete the read request") from exc
+        raise tool_failure(logger, "Neo4j could not complete the read request", exc) from exc
 
 
 def create_server(repository: Neo4jRepository | None = None) -> MCPServer:
@@ -174,10 +178,16 @@ def create_server(repository: Neo4jRepository | None = None) -> MCPServer:
 
 
 mcp = create_server()
+server = mcp
 
 
 def main() -> None:
     """Run the Neo4j MCP server over standard input/output."""
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     mcp.run(transport="stdio")
 
 

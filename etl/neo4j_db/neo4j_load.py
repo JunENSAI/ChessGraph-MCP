@@ -1,9 +1,7 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
-from dotenv import find_dotenv, load_dotenv
 from neo4j import GraphDatabase
 from sqlalchemy import create_engine
 
@@ -12,7 +10,7 @@ from load_chessgame_graph import load_chessgame_graph
 from load_endgame_graph import load_endgame_graph
 from load_opening_graph import load_opening_graph
 
-load_dotenv(find_dotenv(usecwd=True) or find_dotenv())
+from chess_mcp.config import get_neo4j_settings, postgres_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,17 +18,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("neo4j_load")
 
-DB_USER = os.getenv("POSTGRES_USER", "user_name")
-DB_PASS = os.getenv("POSTGRES_PASSWORD", "user_password")
-DB_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "db_name")
-
-POSTGRES_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-NEO4J_URI = os.getenv("NEO4J_URI", "localhost_port")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4_user")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
 SCHEMA_CONSTRAINTS = [
     "CREATE CONSTRAINT position_fen_unique IF NOT EXISTS FOR (p:Position) REQUIRE p.fen_norm IS UNIQUE",
@@ -54,9 +41,11 @@ def ensure_neo4j_schema(neo4j_driver) -> None:
 
 def run_neo4j_etl() -> None:
     """Orchestrate the PostgreSQL-to-Neo4j Knowledge Graph synchronization pipeline."""
-    logger.info("Connecting to PostgreSQL (%s) and Neo4j (%s)", DB_NAME, NEO4J_URI)
-    pg_engine = create_engine(POSTGRES_URL)
-    neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    pg_url = postgres_url()
+    neo4j = get_neo4j_settings()
+    logger.info("Connecting to PostgreSQL (%s) and Neo4j (%s)", pg_url.database, neo4j.uri)
+    pg_engine = create_engine(pg_url)
+    neo4j_driver = GraphDatabase.driver(neo4j.uri, auth=(neo4j.user, neo4j.password))
 
     try:
         neo4j_driver.verify_connectivity()

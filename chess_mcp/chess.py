@@ -34,23 +34,3 @@ def clamp_limit(value: int, maximum: int, *, minimum: int = 1) -> int:
     if value < minimum:
         raise ValueError(f"limit must be at least {minimum}")
     return min(value, maximum)
-
-
-def replay_uci_line(
-    fen: str, moves_uci: list[str]
-) -> tuple[list[str], list[str], str]:
-    """Replay a UCI line and return UCI, SAN, and the final full FEN."""
-    board = parse_board(fen)
-    normalized_uci: list[str] = []
-    san_moves: list[str] = []
-    for ply, token in enumerate(moves_uci, start=1):
-        try:
-            move = chess.Move.from_uci(token)
-        except ValueError as exc:
-            raise ValueError(f"Invalid UCI move at ply {ply}: {token}") from exc
-        if move not in board.legal_moves:
-            raise ValueError(f"Illegal UCI move at ply {ply}: {token}")
-        normalized_uci.append(move.uci())
-        san_moves.append(board.san(move))
-        board.push(move)
-    return normalized_uci, san_moves, board.fen(en_passant="fen")

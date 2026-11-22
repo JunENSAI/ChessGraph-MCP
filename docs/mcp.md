@@ -78,14 +78,16 @@ PostgreSQL and Stockfish keep answering. PostgreSQL is a system service
 
 ## PostgreSQL tools
 
-- `list_games`: filter games by type, outcome, opening, and date.
+- `list_games`: filter games by player, type, outcome, ECO code, and date.
 - `get_game`: retrieve one game's metadata.
 - `get_game_moves`: retrieve its ordered move/evaluation records.
 - `get_player_summary`: aggregate a player's performance, defaulting to
   `CHESS_USERNAME`.
 - `get_blunders`: list the data owner's largest evaluated mistakes.
+- `get_coaching_brief`: rank opening families by score, name the weakest one,
+  list repeated moves that differ from the stored engine move, and four tasks.
 - `find_position_occurrences`: find personal games containing a FEN position.
-- `lookup_opening`: retrieve opening theory by FEN or ECO code.
+- `lookup_opening`: retrieve opening theory for an exact normalized FEN.
 - `lookup_endgame_positions`: retrieve matching endgame benchmarks.
 
 The `chessgraph://postgres/schema` resource documents table and field semantics.

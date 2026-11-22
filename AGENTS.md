@@ -54,14 +54,14 @@ cd ui && npm test
 cd ui && npm run build
 ```
 
-Configuration comes from `.env`, copied from `.env.template`. Do not commit secrets. The coach in `ui/src/services/coach.ts` calls the Hermes gateway through the Vite proxy path `/hermes-api`, which forwards to `HERMES_API_URL` and adds the `HERMES_API_KEY` bearer header server-side. `HERMES_API_KEY` must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on a local server and never expose it as a `VITE_` variable or read it in the browser. The recap reads PostgreSQL through the retrieval API in `backend/`. Lesson lines and the game library still come from `ui/src/data/demo.ts`.
+Configuration comes from `.env`, copied from `.env.template`. Do not commit secrets. The coach in `ui/src/services/coach.ts` calls the Hermes gateway through the Vite proxy path `/hermes-api`, which forwards to `HERMES_API_URL` and adds the `HERMES_API_KEY` bearer header server-side. `HERMES_API_KEY` must match `API_SERVER_KEY` in `~/.hermes/.env`. Keep that key on a local server and never expose it as a `VITE_` variable or read it in the browser. The recap reads PostgreSQL through the retrieval API in `backend/`. Every UI panel reads the retrieval API; there is no demo data.
 
 ## Layout
 
 - `chess_mcp/` — MCP servers, models, and repositories
 - `backend/` — FastAPI reads for the UI, using those repositories
 - `etl/` — writers and the SQL schema
-- `ui/` — React coach, still on demo data
+- `ui/` — React coach, reading the retrieval API
 - `agent/` — Hermes persona, memory seeds, and `hermes-mcp.example.yaml`
 - `docs/mcp.md` — server contracts and security
 - `CHESS.md`, `STOCKFISH.md` — domain references

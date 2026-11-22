@@ -47,7 +47,6 @@ function introFor(session: LessonSession | null) {
   if (!session) return 'Choose an opening, a defense, an endgame, or a color to play.'
   if (session.missingLine) return `${session.title}. ${session.detail}`
   if (session.id.startsWith('task:')) return session.detail
-  if (session.id.startsWith('split:')) return `${session.title}. ${session.detail}`
   if (session.enginePlay) {
     const side = session.userColor === 'white' ? 'White' : 'Black'
     return `You play ${side}. Stockfish plays the other side. After each of its moves the clock stays paused until you press Continue, so you can read the explanation.`
