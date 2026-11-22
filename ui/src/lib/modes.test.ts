@@ -11,7 +11,7 @@ describe('coach modes', () => {
   it('labels every tab once', () => {
     const labels = MODES.map(mode => mode.label)
     expect(new Set(labels).size).toBe(labels.length)
-    expect(labels).toContain('Training')
+    expect(labels).toContain('Play & train')
     expect(labels).toContain('My games')
   })
 })

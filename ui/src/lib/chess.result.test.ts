@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isPromotion, resultText, tryMove } from './chess'
+import { checkedKingSquare, isPromotion, resultText, tryMove } from './chess'
 
 describe('resultText', () => {
   it('names the side that delivered checkmate', () => {
@@ -21,5 +21,13 @@ describe('promotion', () => {
     expect(tryMove(fen, 'e7', 'e8', 'r')?.san).toContain('=R')
     expect(tryMove(fen, 'e7', 'e8', 'b')?.san).toContain('=B')
     expect(tryMove(fen, 'e7', 'e8', 'n')?.san).toContain('=N')
+  })
+})
+
+describe('checkedKingSquare', () => {
+  it('finds the king of the side in check', () => {
+    expect(checkedKingSquare('rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3')).toBe('e1')
+    expect(checkedKingSquare('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')).toBeNull()
+    expect(checkedKingSquare('not a fen')).toBeNull()
   })
 })

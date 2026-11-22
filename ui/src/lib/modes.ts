@@ -8,7 +8,7 @@ export interface ModeSpec {
 /** Recap is Home: first tab and the default view. */
 export const MODES: ModeSpec[] = [
   { id: 'recap', label: 'Home' },
-  { id: 'training', label: 'Training' },
+  { id: 'training', label: 'Play & train' },
   { id: 'games', label: 'My games' },
 ]
 

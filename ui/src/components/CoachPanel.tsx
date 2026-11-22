@@ -22,6 +22,8 @@ interface CoachPanelProps {
   prompts: string[]
   onAsk: (question: string) => void
   className?: string
+  /** Inside a side-panel tab: no card chrome of its own. */
+  embedded?: boolean
 }
 
 const SOURCE_LABELS = { postgres: 'Games', neo4j: 'Graph', stockfish: 'Stockfish' }
@@ -43,6 +45,7 @@ export function CoachPanel({
   prompts,
   onAsk,
   className = '',
+  embedded = false,
 }: CoachPanelProps) {
   const [draft, setDraft] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
@@ -61,13 +64,15 @@ export function CoachPanel({
   }
 
   return (
-    <section className={`panel coach-panel ${className}`} aria-label={title}>
-      <header className="panel-head">
-        <div>
-          <h2 className="panel-title">{title}</h2>
-          <p className="panel-subtitle">{subtitle}</p>
-        </div>
-      </header>
+    <section className={`${embedded ? 'coach-embedded' : 'panel'} coach-panel ${className}`} aria-label={title}>
+      {!embedded && (
+        <header className="panel-head">
+          <div>
+            <h2 className="panel-title">{title}</h2>
+            <p className="panel-subtitle">{subtitle}</p>
+          </div>
+        </header>
+      )}
 
       <div className="agent-state">
         <div className="agent-orb">

@@ -524,3 +524,119 @@ New tests:
 ### Found, not fixed here
 
 - `ruff` is not a project dependency, so no Python lint ran.
+
+## Batch 5: play-first UI
+
+### Why
+
+- The board shared the screen with three panels and was squeezed.
+- Playing Stockfish paused after every engine move and fired a coach request;
+  there was no strength setting, no move list, no takeback and no PGN.
+- The 3D graph blanked the whole My games view without WebGL, and the review's
+  previous/next buttons jumped back into the game while a Stockfish line was
+  shown.
+- The clock kept running in a hidden view, and player bars said "Junior"
+  whatever the account was.
+
+### Changed
+
+**API**
+
+- `POST /api/engine/play` (`backend/opponent.py`): one opponent move with
+  `UCI_LimitStrength`/`UCI_Elo` (1320–3190, `null` = full strength) and a
+  50–3000 ms think time. It runs in its own Stockfish process, so the analysis
+  engine always searches at full strength. Answers the move, SAN, FEN and the
+  score from the mover's side (used to let a lost engine resign).
+- `GET /api/explorer`: graph v2 context, moves (book, yours, opponents') and
+  your games through the position. A position missing from the graph is an
+  empty answer, not a 404.
+- A dead Stockfish process answers 503 instead of 500.
+
+**UI layout**
+
+- Board first: the board column is sized to the window height (612 px at
+  1440×900, no page scroll), with one tabbed side panel. On a phone the panel
+  moves under the board.
+- Player bars show name, rating, clock, captured pieces and the material lead,
+  and highlight the side to move. The name comes from `GET /api/player`.
+- The board highlights a king in check, keeps legal-move dots, and lets you
+  draw your own arrows with a right-click drag. The evaluation bar animates.
+- Move sounds (move, capture, check, castle, end) are synthesized with
+  WebAudio, with a mute button remembered in the browser.
+- ← → step through moves, ↑/Home and ↓/End jump, F flips, in every board view.
+
+**Play & train** (was Training)
+
+- Tabs: Play, Moves, Coach, Explorer.
+- New game: colour, strength (matched to your average rating until you choose)
+  and time control. The engine answers continuously; the coach is asked only
+  when you press Explain or ask a question.
+- Takeback (your move and its reply), Resign, Rematch, Switch sides, Copy PGN.
+- Browse earlier moves without leaving the game; moving returns to the live
+  position.
+- Leaving the view pauses a running clock.
+- A coach answer's line is drawn as arrows instead of being played onto your
+  game.
+
+**My games**
+
+- Tabs: Games, Moves, Coach, Explorer. The 3D position graph and its
+  dependencies (`react-force-graph-3d`, `three`, `three-spritetext`,
+  `@types/three`) are removed; the page no longer needs WebGL.
+- Numbered move table with `?!`, `?` and `??` from stored centipawn loss
+  (50/100/300, as in the graph), the key move underlined, and each side's
+  mistake count.
+- Previous/next work on whatever is shown: the game, or the Stockfish line.
+- A loss of 5,000 cp or more reads "swings to a mate", as in the coach.
+  The UI used 9,000, so an 8,990 cp swing was shown as a plain loss.
+- The Explorer can open any game that reached the position, even one not yet
+  loaded in a folder.
+
+**Docs**: `README.md` (routes, the three modes), `ui/README.md`,
+`backend/README.md`. Both READMEs still said the coach had twelve tools; it has
+fourteen since Batch 4.
+
+### Tested
+
+| Command | Result |
+| --- | --- |
+| `uv run pytest` | 175 passed, 5 skipped (the opt-in integration tests) |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 5 passed, including a live 1320-Elo move |
+| `uv run chessgraph-smoke` | postgres, neo4j, stockfish: all PASS |
+| `cd ui && npm test` | 93 passed (72 before) |
+| `cd ui && npm run lint` | 2 warnings, both existing (`usePositionEval`, `RecapView`); the `GamesView` one is gone |
+| `cd ui && npm run build` | built; Vite still warns that the main chunk is over 500 kB |
+| Account-name scan of every changed file | no match |
+
+In the browser (in-app preview, API restarted on the new code):
+
+- 1440×900: the page is exactly 900 px tall, the board column has no overflow.
+  A game as White at 1800: 1.e4 c6 2.d4 d5 came back at once, the clocks ran,
+  ← ← showed move 2, End returned, Takeback restored 1.e4 c6 with White to
+  move. The Explorer showed the Caro-Kann (B10), 462 of your games, 216 W, 30
+  D, 216 L, with 2.d4 marked book and engine best.
+- Switching to My games paused the running game clock. The latest game opened
+  at its key moment with arrows; the move table showed 14 glyphs (2 of your
+  mistakes, 7 of the opponent's). After *Better move*, previous/next stepped
+  through the line (11. Rh4# → 10. Kh1 → 9. Bc5+ → 10. Kh1).
+- 375×812: no horizontal scroll, a 327 px board, tabs under the board.
+- A fresh load visiting every view and tab: no console error, and no
+  three.js request.
+- Two layout bugs were found and fixed during this check: visually hidden
+  labels in the lesson list stretched the page to 1,482 px, and the board
+  column was 17 px too tall.
+
+New tests:
+
+- `tests/test_opponent.py` (8): UCI options for limited and full strength, the
+  score from the mover's side, refused requests never reach the engine, an
+  illegal engine move, the play route's validation, the explorer route with a
+  known and an unknown position.
+- `ui/src/lib/*.test.ts`: notation (glyphs, move pairing including a
+  Black-first start, PGN), material (captures, lead, promotion), strength
+  (range, closest level, think time), keys (navigation, flip, typing targets),
+  explorer (row merge and order), sounds, and `checkedKingSquare`.
+
+### Not done
+
+- No visual regression test: the browser checks above were run by hand.

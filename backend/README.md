@@ -24,20 +24,25 @@ The Vite dev server proxies `/api` to `BACKEND_URL` (default
 | `GET /api/coach/plan` | Ranked training plan |
 | `GET /api/openings?fen=` | Opening-file rows for that position |
 | `GET /api/positions?fen=` | Neo4j context and moves |
+| `GET /api/explorer?fen=` | Graph v2 moves (book, yours, opponents'), context, and your games through the position; an unknown position is an empty answer, not a 404 |
 | `POST /api/engine/analyze` | Bounded Stockfish search |
 | `POST /api/engine/compare` | Same-root played move versus best move |
 | `POST /api/engine/validate` | Legal replay of a UCI line |
+| `POST /api/engine/play` | `{fen, elo, movetime_ms}`: one opponent move with `UCI_LimitStrength`/`UCI_Elo` (1320–3190, `null` = full strength), 50–3000 ms |
 | `POST /api/coach/chat` | The coach, streamed as server-sent events |
 | `GET /api/coach/status` | `{"mode": "claude" \| "offline", "model": ...}` |
 
 This process starts its own Stockfish engine the first time an `/api/engine`
-route is called. The Stockfish MCP server keeps its own separate engine.
+route is called. `POST /api/engine/play` runs a second process
+(`backend/opponent.py`) so that a limited-strength opponent never changes an
+analysis. The Stockfish MCP server keeps its own separate engine. A Stockfish
+process that dies answers 503.
 
 ## Coach
 
 `backend/coach/` holds the in-app coach.
 
-- **`tools.py`** has twelve tools with the same names and meaning as the MCP
+- **`tools.py`** has fourteen tools with the same names and meaning as the MCP
   tools: `get_player_summary`, `get_coaching_brief`, `list_games`,
   `get_game_moves`, `get_blunders`, `find_position_occurrences`,
   `lookup_opening`, `get_position_context`, `get_position_moves`,

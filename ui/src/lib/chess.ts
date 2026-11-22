@@ -123,3 +123,21 @@ export function resultText(fen: string): string | null {
   if (chess.isDraw()) return 'Draw'
   return null
 }
+
+/** The square of the king in check, for the board highlight, or null. */
+export function checkedKingSquare(fen: string): Square | null {
+  let chess: Chess
+  try {
+    chess = new Chess(fen)
+  } catch {
+    return null
+  }
+  if (!chess.inCheck()) return null
+  const turn = chess.turn()
+  for (const row of chess.board()) {
+    for (const cell of row) {
+      if (cell && cell.type === 'k' && cell.color === turn) return cell.square
+    }
+  }
+  return null
+}

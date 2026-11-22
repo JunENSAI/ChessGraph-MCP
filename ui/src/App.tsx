@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState } from 'react'
 import { motion } from 'motion/react'
-import { FolderOpen, GraduationCap, House, type LucideIcon } from 'lucide-react'
+import { FolderOpen, House, Swords, type LucideIcon } from 'lucide-react'
 import { GamesView } from './views/GamesView'
 import { TrainingView } from './views/TrainingView'
 import { DEFAULT_MODE, MODES, type Mode } from './lib/modes'
@@ -9,7 +9,7 @@ const RecapView = lazy(() => import('./views/RecapView').then(module => ({ defau
 
 const ICONS: Record<Mode, LucideIcon> = {
   recap: House,
-  training: GraduationCap,
+  training: Swords,
   games: FolderOpen,
 }
 
@@ -58,7 +58,7 @@ export default function App() {
           )}
         </div>
         <div hidden={mode !== 'training'} className="view-slot">
-          <TrainingView />
+          <TrainingView active={mode === 'training'} />
         </div>
         <div hidden={mode !== 'games'} className="view-slot">
           <GamesView active={mode === 'games'} />
