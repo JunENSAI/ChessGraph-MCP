@@ -1,10 +1,7 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
-
-from dotenv import find_dotenv, load_dotenv
 from sqlalchemy import create_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -12,7 +9,7 @@ from load_chessgame import load_all_chess_games
 from load_endgame import load_endgame_theory
 from load_opening import load_opening_theory
 
-load_dotenv(find_dotenv(usecwd=True) or find_dotenv())
+from chess_mcp.config import base_data_dir, get_chess_username, postgres_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,16 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("postgres_load")
 
-DB_USER = os.getenv("POSTGRES_USER", "user_name")
-DB_PASS = os.getenv("POSTGRES_PASSWORD", "user_password")
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "user_db")
-
-DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-CHESS_USERNAME = os.getenv("CHESS_USERNAME", "my_username")
-BASE_DATA_DIR = Path(os.getenv("BASE_DATA_DIR", "/home/junior/ChessGraph-MCP/data"))
+CHESS_USERNAME = get_chess_username()
+BASE_DATA_DIR = base_data_dir()
 
 MY_GAMES_DIR = BASE_DATA_DIR / "my_games"
 OPENING_PARQUET_PATH = BASE_DATA_DIR / "opening_theory" / "chess_openings.parquet"
@@ -39,12 +28,11 @@ PGN_CATEGORIES = ["blitz", "rapid", "bullet", "daily", "bot"]
 
 def run_postgres_etl() -> None:
     """Orchestrate the full PostgreSQL ingestion pipeline using root .env variables."""
-    logger.info(
-        "Starting PostgreSQL ETL orchestration for user '%s' on database '%s'",
-        CHESS_USERNAME,
-        DB_NAME,
-    )
-    engine = create_engine(DATABASE_URL)
+    if not CHESS_USERNAME:
+        raise SystemExit("Set CHESS_USERNAME in .env before loading games.")
+    url = postgres_url()
+    logger.info("Starting PostgreSQL ETL on database '%s'", url.database)
+    engine = create_engine(url)
 
     opening_lookup = load_opening_theory(
         engine=engine,

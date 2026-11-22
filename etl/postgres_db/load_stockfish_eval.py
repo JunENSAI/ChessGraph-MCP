@@ -1,16 +1,11 @@
 import logging
-import os
-import sys
 from pathlib import Path
 
 import chess
 import chess.engine
-from dotenv import find_dotenv, load_dotenv
 from sqlalchemy import create_engine, text
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-load_dotenv(find_dotenv(usecwd=True) or find_dotenv())
+from chess_mcp.config import get_int_setting, get_setting, postgres_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,16 +13,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("load_stockfish_eval")
 
-DB_USER = os.getenv("POSTGRES_USER", "user_name")
-DB_PASS = os.getenv("POSTGRES_PASSWORD", "user_password")
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "db_name")
-
-DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "/usr/games/stockfish")
-SEARCH_DEPTH = int(os.getenv("STOCKFISH_DEPTH", "15"))
+STOCKFISH_PATH = get_setting("STOCKFISH_PATH", "/usr/games/stockfish")
+SEARCH_DEPTH = get_int_setting("STOCKFISH_DEPTH", 10)
 BATCH_SIZE = 50
 
 
@@ -142,7 +129,7 @@ def evaluate_all_games(engine_conn, stockfish_binary: str, depth: int) -> int:
 
 
 if __name__ == "__main__":
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(postgres_url())
     evaluate_all_games(
         engine_conn=engine, stockfish_binary=STOCKFISH_PATH, depth=SEARCH_DEPTH
     )

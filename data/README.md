@@ -45,9 +45,11 @@ Kh5 28. Qh7+ Kg5 29. Qg6# 1-0
 
 - **[Date " "]** : it respond the question "When was the game played ?"
 
-- **[Result " "]** : "1-0" is meaning that the player with the white pieces won. "0-1" is when the player with the black pieces won.
+- **[Result " "]** : "1-0" means the player with the white pieces won, "0-1" means Black won, and "1/2-1/2" is a draw.
 
-- **[TimeControl " "]** : the time control indicated is on seconds. So, 600 seconds can be converted as a 10 minutes game to each player.
+- **[TimeControl " "]** : the base time in seconds, plus the increment after a `+`. `600` is 10 minutes per player with no increment. `180+2` is 3 minutes plus 2 seconds per move. Daily (correspondence) games are written `1/86400`, meaning one move per 86400 seconds (one day).
+
+- **Clock comments** : live games also carry the remaining clock after each move as a comment, for example `1. e4 {[%clk 0:09:58.1]}`. The ETL stores it in `game_moves.clock_rem_sec`. The short example above has these comments stripped.
 
 - **[Termination " "]** : indicate how the game was ended. Like here the player with the white pieces has won by checkmate his/her opponent.
 
@@ -65,7 +67,7 @@ A chess game can be divided in three parts :
 
 ### Opening
 
-The Opening represents the first part of a chess game. It is related to what moves has been already studied before and played by a player today. It can ended very early if the player is not very prepared or doesn't really rely on theory. Otherwise, player in some level like GrandMaster can play **30 moves** of theory.
+The Opening represents the first part of a chess game. It is related to what moves has been already studied before and played by a player today. It can ended very early if the player is not very prepared or doesn't really rely on theory. A grandmaster can play more than **20 moves** of a main line from memory, and some sharp lines are prepared even deeper.
 
 Opening have names, here are some examples :
 
@@ -81,7 +83,7 @@ Opening have names, here are some examples :
 
 ### EndGame
 
-The EndGame is the last part of a chess game. It happens when the Queen is off the board or when the two players have only Queen and few pawns with no other pieces.
+The EndGame is the last part of a chess game. There is no single official definition. It usually starts once most pieces have been traded, typically with the queens off and only a few minor or major pieces left. The Endgame Atlas dataset used here labels each position by its exact material, written White side first (for example `KRPvKR`: White has king, rook and pawn against Black's king and rook).
 
 Player have studied some of those EndGames and have established some theory behind. Here are some known EndGame :
 

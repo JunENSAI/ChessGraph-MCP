@@ -34,9 +34,9 @@ Chess is inherently a **directed state-transition graph**, not a flat list of te
 
 1. **Automatic Transposition Resolution:** In sequential PGN text or SQL tables, `1. d4 Nf6 2. c4 e6` and `1. c4 e6 2. d4 Nf6` look like two completely different move sequences. In Neo4j, both paths naturally converge into the **exact same `(:Position)` node** (`fen_norm`), uniting all your games and opening theory that pass through that board state.
 
-2. **Multi-Hop Horizon Exploration:** When our Coach Agent or 3D UI explores 3–4 candidate branches 10 moves ahead (`20 plies`), Cypher pattern matching (`-[:PLAYED_MOVE*1..20]->`) traverses the decision tree natively without recursive SQL self-joins.
+2. **Multi-Hop Exploration:** Cypher pattern matching (`-[:PLAYED_MOVE*1..4]->`) walks candidate branches natively, without recursive SQL self-joins. The MCP tools cap traversals at `NEO4J_MAX_PATH_DEPTH` (at most 4 plies) to keep every read bounded.
 
-3. **Bridging Personal Habits to Theory:** Graph edges connect your personal `(:Position)` nodes directly to Hugging Face `(:Opening)` and `(:EndgamePattern)` hubs, allowing **Hermes-Agent** to spot the exact node where your move diverges from book theory.
+3. **Bridging Personal Habits to Theory:** Graph edges connect your personal `(:Position)` nodes directly to Hugging Face `(:Opening)` and `(:EndgamePattern)` hubs, allowing the coach to spot the exact node where your move diverges from book theory.
 
 ---
 
@@ -138,9 +138,10 @@ RETURN path
 LIMIT 50;
 
 // Visualize your Blunder Hotspots (avg_cp_loss >= 100) and the games they happened in
-MATCH path = (p1:Position)-[r:PLAYED_MOVE]->(p2:Position)<-[:BLUNDERED_IN]-(g:Game)
+MATCH path = (p1:Position)-[r:PLAYED_MOVE]->(p2:Position)
+MATCH blunder = (p1)-[:BLUNDERED_IN]->(g:Game)
 WHERE r.avg_cp_loss >= 100
-RETURN path
+RETURN path, blunder
 LIMIT 40;
 
 // Visualize your Games transitioning into Endgame Pattern Hubs

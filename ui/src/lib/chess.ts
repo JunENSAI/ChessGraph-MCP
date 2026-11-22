@@ -123,8 +123,3 @@ export function resultText(fen: string): string | null {
   if (chess.isDraw()) return 'Draw'
   return null
 }
-
-export function formatEval(centipawns: number): string {
-  const pawns = centipawns / 100
-  return `${pawns > 0 ? '+' : ''}${pawns.toFixed(2)}`
-}

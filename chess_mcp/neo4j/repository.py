@@ -9,7 +9,7 @@ from neo4j import GraphDatabase, READ_ACCESS
 from neo4j import Driver
 
 from chess_mcp.chess import clamp_limit, normalize_fen
-from chess_mcp.config import Neo4jSettings
+from chess_mcp.config import MAX_PATH_DEPTH, Neo4jSettings
 
 from .models import (
     EndgameContext,
@@ -22,7 +22,6 @@ from .models import (
 
 
 MAX_RESULTS = 100
-MAX_PATH_DEPTH = 4
 
 POSITION_CONTEXT_CYPHER = """
 MATCH (p:Position {fen_norm: $fen_norm})
@@ -236,6 +235,8 @@ LIMIT $limit
         )
 
     def get_game_blunders(self, game_id: int, limit: int = 100) -> GameBlunders:
+        if game_id < 1:
+            raise ValueError("game_id must be a positive integer")
         bounded_limit = clamp_limit(limit, self.max_results)
         rows = self._read(
             GAME_BLUNDERS_CYPHER,

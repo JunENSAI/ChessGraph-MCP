@@ -32,9 +32,11 @@ The design is built around three principles:
 
 - **Fast inference:** a relatively shallow network and low-precision integer arithmetic make evaluation efficient on CPUs.
 
-## Board features: HalfKP
+## Board features: HalfKP (historical) and HalfKAv2_hm (current)
 
-The documented HalfKP feature set represents each feature as a tuple:
+> **Version note.** HalfKP is the feature set of the first Stockfish NNUE networks (Stockfish 12, 2020). It is explained below because it is the simplest form of the idea. Current releases, including the Stockfish 17.1 binary this project runs, use **HalfKAv2_hm**, and they evaluate with **two networks**: a big one for balanced positions and a small, faster one for positions that are clearly decided. See [Modern feature set](#modern-feature-set-halfkav2_hm) for what changed.
+
+HalfKP represents each feature as a tuple:
 
 $$
 f = (s_{K}, s_{p}, t_{p}, c_{p})
@@ -59,6 +61,18 @@ $$
 This is the **number of possible features**, not the number active in every position. A position activates only the features corresponding to its actual pieces. The king square is part of the feature, allowing the network to learn how piece placement relates to king location.
 
 Stockfish maintains a representation for **both perspectives**. For the side-specific view, board squares and colors are oriented consistently, so the network can learn similar patterns without needing to treat White and Black as unrelated cases.
+
+### Modern feature set: HalfKAv2_hm
+
+HalfKAv2_hm keeps the same principle (features pair "my king square" with each piece), with three changes:
+
+- **Kings are included.** The "A" stands for *all* pieces. The opponent's king is an input too, while the own king square still selects the feature block.
+
+- **Horizontal mirroring** ("hm"). Positions are mirrored so the own king is always on files e–h, which halves the king buckets to 32.
+
+- **Merged king planes.** The two king piece planes are merged, because the own king's square is already given by the bucket. That leaves 11 piece planes.
+
+That gives $32 \times 64 \times 11 = 22{,}528$ possible inputs per perspective. The networks also add small *PSQT* and *layer-stack* outputs selected by piece count.
 
 ## The accumulator: the key efficiency trick
 
