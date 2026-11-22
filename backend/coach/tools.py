@@ -47,6 +47,17 @@ class FenLimitInput(FenInput):
     limit: int = Field(default=10, ge=1, le=20)
 
 
+class PositionMovesInput(FenLimitInput):
+    by: Literal["all", "theory", "owner", "opponent"] = Field(
+        default="all", description="theory = book moves; owner = the player's moves; opponent = opponents' moves."
+    )
+
+
+class TheoryExitsInput(_Input):
+    limit: int = Field(default=10, ge=1, le=20)
+    by: Literal["all", "owner", "opponent"] = Field(default="owner", description="Who played the first non-book move.")
+
+
 class ListGamesInput(_Input):
     game_type: GameType | None = None
     user_outcome: UserOutcome | None = None
@@ -211,8 +222,16 @@ def _position_context(ctx: ToolContext, args: FenInput) -> Any:
     return ctx.neo4j().get_position_context(args.fen)
 
 
-def _position_moves(ctx: ToolContext, args: FenLimitInput) -> Any:
-    return ctx.neo4j().get_position_moves(args.fen, args.limit)
+def _position_moves(ctx: ToolContext, args: PositionMovesInput) -> Any:
+    return ctx.neo4j().get_position_moves(args.fen, args.limit, args.by)
+
+
+def _games_through(ctx: ToolContext, args: FenLimitInput) -> Any:
+    return ctx.neo4j().get_games_through_position(args.fen, args.limit)
+
+
+def _theory_exits(ctx: ToolContext, args: TheoryExitsInput) -> Any:
+    return ctx.neo4j().get_theory_exits(args.limit, args.by)
 
 
 def _analyze(ctx: ToolContext, args: AnalyzeInput) -> Any:
@@ -239,8 +258,10 @@ TOOLS: tuple[CoachTool, ...] = (
     CoachTool("get_blunders", "postgres", "The player's own largest evaluated mistakes, optionally for one game, largest first.", BlundersInput, _blunders),
     CoachTool("find_position_occurrences", "postgres", "Stored games where this exact position occurred, and the move played there.", FenLimitInput, _occurrences),
     CoachTool("lookup_opening", "postgres", "Named opening theory that reaches exactly this position.", FenInput, _lookup_opening),
-    CoachTool("get_position_context", "neo4j", "The position node in the graph with its opening and endgame classifications.", FenInput, _position_context),
-    CoachTool("get_position_moves", "neo4j", "Moves leaving this position: the player's moves (PLAYED_MOVE, with results and average centipawn loss) and theory moves (THEORY_MOVE).", FenLimitInput, _position_moves),
+    CoachTool("get_position_context", "neo4j", "The position in the graph: phase, material, average stored eval from the side to move, games that reached it, exact opening, opening families whose lines pass through it, endgame type and the stored engine best move.", FenInput, _position_context),
+    CoachTool("get_position_moves", "neo4j", "Moves leaving this position, most-played first: played moves (PLAYED_MOVE) split by mover, by = owner (the player) or opponent, each with the mover's wins/draws/losses, score_pct, average centipawn loss and severity counts; then theory moves (THEORY_MOVE). Pass by = theory, owner or opponent to list one kind.", PositionMovesInput, _position_moves),
+    CoachTool("get_games_through_position", "neo4j", "The player's games that reached this position, newest first, with the player's wins, draws and losses from it.", FenLimitInput, _games_through),
+    CoachTool("get_theory_exits", "neo4j", "Where the player's games leave opening theory most often: the position, the first non-book move, who played it, the book moves there and the player's score. book_ended = true means the opening data has no move there, so the line ended rather than being left.", TheoryExitsInput, _theory_exits),
     CoachTool("analyze_position", "stockfish", "Fresh Stockfish analysis: score from the side to move, best move and principal variation in UCI and SAN. limit.value in the result is the depth searched.", AnalyzeInput, _analyze),
     CoachTool("compare_move", "stockfish", "Compare a played move with Stockfish's best move from the same position and the same budget; returns both scores and the centipawn loss.", CompareInput, _compare),
     CoachTool("validate_line", "stockfish", "Replay a UCI line from a position and return legal SAN and the FEN after each move. Use before citing any continuation.", ValidateInput, _validate),

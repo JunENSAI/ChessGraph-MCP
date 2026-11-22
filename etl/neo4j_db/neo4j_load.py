@@ -1,86 +1,166 @@
+"""Build the ChessGraph v2 graph in Neo4j from PostgreSQL.
+
+    uv run python etl/neo4j_db/neo4j_load.py --dry-run   # transform only, print counts
+    uv run python etl/neo4j_db/neo4j_load.py --reset     # delete chess labels, then load
+
+The Neo4j database is shared with other projects. ``--reset`` deletes only the
+chess labels in ``write.CHESS_LABELS``; the loader compares every other label's
+node count before and after and exits non-zero if one changed.
+"""
+
+from __future__ import annotations
+
+import argparse
 import logging
-import sys
-from pathlib import Path
+from typing import Any
 
 from neo4j import GraphDatabase
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from load_chessgame_graph import load_chessgame_graph
-from load_endgame_graph import load_endgame_graph
-from load_opening_graph import load_opening_graph
+from chess_mcp.config import get_chess_username, get_neo4j_settings, postgres_url
+from etl.neo4j_db.transform import GraphPayload, build_graph
+from etl.neo4j_db.write import CHESS_LABELS, ensure_schema, label_counts, reset_chess_graph, write_graph
 
-from chess_mcp.config import get_neo4j_settings, postgres_url
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
 logger = logging.getLogger("neo4j_load")
 
+GAMES_SQL = text(
+    """
+    SELECT game_id, game_type::TEXT AS game_type, played_date,
+           white_username, black_username, white_elo, black_elo,
+           user_color, user_elo, opponent_elo, user_outcome, result::TEXT AS result,
+           termination, time_control_raw, base_time_sec, increment_sec,
+           eco_code, opening_name, total_plies
+    FROM games
+    ORDER BY game_id
+    """
+)
 
-SCHEMA_CONSTRAINTS = [
-    "CREATE CONSTRAINT position_fen_unique IF NOT EXISTS FOR (p:Position) REQUIRE p.fen_norm IS UNIQUE",
-    "CREATE CONSTRAINT opening_epd_unique IF NOT EXISTS FOR (o:Opening) REQUIRE o.epd_norm IS UNIQUE",
-    "CREATE CONSTRAINT endgame_type_unique IF NOT EXISTS FOR (e:EndgamePattern) REQUIRE e.endgame_type IS UNIQUE",
-    "CREATE CONSTRAINT game_id_unique IF NOT EXISTS FOR (g:Game) REQUIRE g.game_id IS UNIQUE",
-    "CREATE INDEX position_piece_count_idx IF NOT EXISTS FOR (p:Position) ON (p.piece_count)",
-    "CREATE INDEX position_material_idx IF NOT EXISTS FOR (p:Position) ON (p.material_sig)",
-    "CREATE INDEX opening_eco_idx IF NOT EXISTS FOR (o:Opening) ON (o.eco_code)",
-    "CREATE INDEX game_type_idx IF NOT EXISTS FOR (g:Game) ON (g.game_type)",
-]
+MOVES_SQL = text(
+    """
+    SELECT game_id, ply_number, turn_color, san_move, uci_move,
+           fen_before_norm, fen_after_norm,
+           eval_cp_before, eval_cp_after, cp_loss, best_move_uci
+    FROM game_moves
+    ORDER BY game_id, ply_number
+    """
+)
+
+OPENINGS_SQL = text(
+    "SELECT opening_id, eco_volume, eco_code, opening_name, pgn_line, uci_line, epd_norm "
+    "FROM opening_theory ORDER BY opening_id"
+)
+
+ENDGAME_PATTERNS_SQL = text(
+    """
+    SELECT endgame_type,
+           MIN(piece_count) AS piece_count,
+           COUNT(*) AS benchmark_positions,
+           ROUND(AVG(player_elo))::INTEGER AS avg_player_elo,
+           MIN(fen_norm) AS sample_fen,
+           MIN(human_move_uci) AS sample_human_move
+    FROM endgame_theory
+    GROUP BY endgame_type
+    ORDER BY endgame_type
+    """
+)
+
+ENDGAME_SAMPLES_SQL = text(
+    """
+    WITH ranked AS (
+        SELECT fen_norm, human_move_uci, endgame_type, player_elo, elo_tier,
+               ROW_NUMBER() OVER (
+                   PARTITION BY endgame_type ORDER BY player_elo DESC NULLS LAST, fen_norm
+               ) AS rn
+        FROM endgame_theory
+    )
+    SELECT fen_norm, human_move_uci, endgame_type, player_elo, elo_tier
+    FROM ranked
+    WHERE rn <= :max_samples
+    ORDER BY endgame_type, rn
+    """
+)
 
 
-def ensure_neo4j_schema(neo4j_driver) -> None:
-    """Create Neo4j uniqueness constraints and indexes if they do not already exist."""
-    with neo4j_driver.session() as session:
-        for statement in SCHEMA_CONSTRAINTS:
-            session.run(statement)
-    logger.info("Verified Neo4j constraints and indexes")
+def fetch_rows(db: Engine, max_samples: int = 25) -> dict[str, list[Any]]:
+    with db.connect() as conn:
+        return {
+            "games": list(conn.execute(GAMES_SQL).mappings()),
+            "moves": list(conn.execute(MOVES_SQL).mappings()),
+            "openings": list(conn.execute(OPENINGS_SQL).mappings()),
+            "endgame_patterns": list(conn.execute(ENDGAME_PATTERNS_SQL).mappings()),
+            "endgame_samples": list(conn.execute(ENDGAME_SAMPLES_SQL, {"max_samples": max_samples}).mappings()),
+        }
 
 
-def run_neo4j_etl() -> None:
-    """Orchestrate the PostgreSQL-to-Neo4j Knowledge Graph synchronization pipeline."""
-    pg_url = postgres_url()
-    neo4j = get_neo4j_settings()
-    logger.info("Connecting to PostgreSQL (%s) and Neo4j (%s)", pg_url.database, neo4j.uri)
-    pg_engine = create_engine(pg_url)
-    neo4j_driver = GraphDatabase.driver(neo4j.uri, auth=(neo4j.user, neo4j.password))
+def other_label_changes(before: dict[str, int], after: dict[str, int]) -> dict[str, tuple[int, int]]:
+    """Non-chess labels whose node count differs between two snapshots."""
+    labels = (set(before) | set(after)) - set(CHESS_LABELS)
+    return {
+        label: (before.get(label, 0), after.get(label, 0))
+        for label in sorted(labels)
+        if before.get(label, 0) != after.get(label, 0)
+    }
 
+
+def log_counts(payload: GraphPayload) -> None:
+    for name, value in payload.counts().items():
+        logger.info("  %-20s %9d", name, value)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--reset", action="store_true", help="delete the chess labels before loading")
+    parser.add_argument("--dry-run", action="store_true", help="read PostgreSQL and transform; write nothing")
+    parser.add_argument("--batch-size", type=int, default=5_000)
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+
+    owner = get_chess_username()
+    if not owner:
+        logger.error("CHESS_USERNAME is not set in .env; it decides which moves are yours.")
+        return 1
+
+    db = create_engine(postgres_url())
     try:
-        neo4j_driver.verify_connectivity()
-        ensure_neo4j_schema(neo4j_driver)
-
-        openings_count, theory_edges_count = load_opening_graph(
-            pg_engine=pg_engine,
-            neo4j_driver=neo4j_driver,
-        )
-
-        endgame_hubs_count, endgame_samples_count = load_endgame_graph(
-            pg_engine=pg_engine,
-            neo4j_driver=neo4j_driver,
-        )
-
-        chessgame_summary = load_chessgame_graph(
-            pg_engine=pg_engine,
-            neo4j_driver=neo4j_driver,
-        )
-
-        logger.info(
-            "Neo4j Sync Complete | Openings: %d | Theory Edges: %d | Endgame Hubs: %d | "
-            "Endgame Samples: %d | Games: %d | Played Edges: %d | Blunder Links: %d",
-            openings_count,
-            theory_edges_count,
-            endgame_hubs_count,
-            endgame_samples_count,
-            chessgame_summary["games"],
-            chessgame_summary["played_move_edges"],
-            chessgame_summary["blunder_links"],
-        )
+        rows = fetch_rows(db)
     finally:
-        neo4j_driver.close()
-        pg_engine.dispose()
+        db.dispose()
+    logger.info("Read %d games and %d moves from PostgreSQL", len(rows["games"]), len(rows["moves"]))
+    payload = build_graph(owner=owner, **rows)
+    del rows
+    logger.info("Graph v2 rows:")
+    log_counts(payload)
+    if args.dry_run:
+        return 0
+
+    settings = get_neo4j_settings()
+    driver = GraphDatabase.driver(settings.uri, auth=(settings.user, settings.password))
+    try:
+        driver.verify_connectivity()
+        before = label_counts(driver)
+        if args.reset:
+            reset_chess_graph(driver)
+        ensure_schema(driver)
+        write_graph(
+            driver,
+            payload,
+            batch_size=args.batch_size,
+            progress=lambda name, n: logger.info("Wrote %-20s %9d", name, n),
+        )
+        after = label_counts(driver)
+    finally:
+        driver.close()
+
+    for label in CHESS_LABELS:
+        logger.info("%-16s %9d -> %9d", label, before.get(label, 0), after.get(label, 0))
+    changed = other_label_changes(before, after)
+    if changed:
+        logger.error("Non-chess labels changed: %s", changed)
+        return 2
+    logger.info("Non-chess labels unchanged (%d labels checked)", len(set(before) - set(CHESS_LABELS)))
+    return 0
 
 
 if __name__ == "__main__":
-    run_neo4j_etl()
+    raise SystemExit(main())

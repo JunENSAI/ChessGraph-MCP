@@ -236,7 +236,9 @@ class OfflineProvider:
 
     def _position(self, request: CoachRequest, ctx: ToolContext):
         analysis = yield from self._call("analyze_position", {"fen": request.fen, "multipv": 1}, ctx)
-        graph = yield from self._call("get_position_moves", {"fen": request.fen, "limit": 10}, ctx)
+        # Two filtered reads: in an opening position the book moves alone can fill a limit.
+        graph = yield from self._call("get_position_moves", {"fen": request.fen, "limit": 5, "by": "owner"}, ctx)
+        book = yield from self._call("get_position_moves", {"fen": request.fen, "limit": 5, "by": "theory"}, ctx)
         lines: list[str] = []
         play: list[str] = []
         if analysis.ok and analysis.data.get("lines"):
@@ -253,23 +255,23 @@ class OfflineProvider:
             lines.append(f"Stockfish evidence is missing: {analysis.content}")
 
         if graph.ok:
-            moves = graph.data.get("moves", [])
-            played = sorted(
-                (m for m in moves if m["relationship"] == "PLAYED_MOVE"),
-                key=lambda m: m.get("total_games") or 0,
+            yours = sorted(
+                (m for m in graph.data.get("moves", []) if m.get("by") == "owner"),
+                key=lambda m: m.get("games") or 0,
                 reverse=True,
             )
-            theory = [m.get("san_move") or m["uci_move"] for m in moves if m["relationship"] == "THEORY_MOVE"]
-            if played:
-                top = played[0]
+            if yours:
+                top = yours[0]
+                loss = f", average loss {top['avg_cp_loss']} cp" if top.get("avg_cp_loss") is not None else ""
                 lines.append(
-                    f"Your games: {sum(m.get('total_games') or 0 for m in played)} moves recorded from here; "
-                    f"most often {top.get('san_move') or top['uci_move']} ({top.get('total_games')} times, {_record(top)})."
+                    f"Your games: you moved from here in {sum(m.get('games') or 0 for m in yours)} games; "
+                    f"most often {top.get('san_move') or top['uci_move']} ({top.get('games')} games, {_record(top)}{loss})."
                 )
             else:
-                lines.append("Your games: this position is not in your stored games.")
+                lines.append("Your games: you never had the move in this position in your stored games.")
+            theory = [m.get("san_move") or m["uci_move"] for m in (book.data.get("moves", []) if book.ok else [])]
             if theory:
-                lines.append("Theory here: " + ", ".join(theory[:5]) + ".")
+                lines.append("Theory here: " + ", ".join(theory) + ".")
         else:
             lines.append("Graph evidence is missing (Neo4j did not answer).")
 

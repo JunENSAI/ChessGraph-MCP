@@ -32,7 +32,7 @@ ChessGraph MCP separates those responsibilities:
 
 - **PostgreSQL remembers** games, move telemetry, openings, endgames, and historical engine evaluations.
 
-- **Neo4j connects** positions, personal moves, theory moves, transpositions, games, and endgame patterns.
+- **Neo4j connects** positions, your moves and your opponents' moves, theory moves, engine best moves, each game's path and milestones (where it left book, where it reached the endgame), mistakes, openings and endgame patterns.
 
 - **The retrieval API serves** those same reads to the interface, without asking the model to fetch the page.
 
@@ -67,7 +67,7 @@ flowchart LR
     subgraph runtime [Read paths]
         api["FastAPI retrieval + in-app coach"]
         pgMcp["PostgreSQL MCP: 9 tools"]
-        graphMcp["Neo4j MCP: 6 tools"]
+        graphMcp["Neo4j MCP: 8 tools"]
         sfMcp["Stockfish MCP: 3 tools"]
         stockfish["Stockfish UCI"]
     end
@@ -111,7 +111,7 @@ Claude explains; it does not assemble the page.
 | Evidence source | Best suited for | MCP capabilities |
 | --- | --- | --- |
 | PostgreSQL | Game selection, longitudinal statistics, move records, openings, endgames, ranked coaching briefs | 9 curated tools, paginated move retrieval, statement timeouts |
-| Neo4j | Theory versus personal choices, transpositions, recurring positions, graph context | 6 curated tools, anchored queries, maximum traversal depth |
+| Neo4j | Theory versus personal choices, transpositions, recurring positions, graph context | 8 curated tools, anchored queries, maximum traversal depth |
 | Stockfish | Fresh position analysis, candidate comparison, WDL, legal variations | MultiPV, same-root move comparison, line validation |
 
 Examples:
@@ -295,7 +295,7 @@ create the schemas from [`etl/sql_files/`](etl/sql_files/) and run:
 ```bash
 uv run python etl/postgres_db/postgres_load.py
 uv run python etl/postgres_db/load_stockfish_eval.py
-uv run python etl/neo4j_db/neo4j_load.py
+uv run python etl/neo4j_db/neo4j_load.py --reset   # deletes and reloads the chess labels only
 ```
 
 The loaders mutate or rebuild data; the MCP servers never invoke them.
@@ -476,12 +476,14 @@ Resource: `chessgraph://postgres/schema`
 
 | Tool | Purpose |
 | --- | --- |
-| `get_position_context` | Retrieve a position with opening and endgame links |
-| `get_position_moves` | Compare outgoing personal and theory moves |
-| `find_transpositions` | Find bounded paths to convergent graph positions |
-| `get_game_blunders` | Retrieve graph-linked mistakes for one game |
-| `get_recurring_blunder_positions` | Rank repeated mistake positions |
-| `get_endgame_context` | Retrieve endgame patterns and benchmark positions |
+| `get_position_context` | A position with phase, stored eval, openings, endgame type and engine best move |
+| `get_position_moves` | Theory moves and played moves, split into yours and your opponents' |
+| `find_transpositions` | Find bounded paths to positions several move orders reach |
+| `get_game_blunders` | Your mistakes in one game, filtered by severity |
+| `get_recurring_blunder_positions` | Positions where you went wrong in several games |
+| `get_endgame_context` | Endgame patterns and benchmark positions |
+| `get_games_through_position` | Your games that reached a position, and your score from it |
+| `get_theory_exits` | Where your games leave opening theory |
 
 Resource: `chessgraph-neo4j://schema`
 

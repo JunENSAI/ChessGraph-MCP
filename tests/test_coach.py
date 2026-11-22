@@ -85,16 +85,24 @@ class FakeNeo4j:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
 
-    def get_position_moves(self, fen: str, limit: int = 20):
+    def get_position_moves(self, fen: str, limit: int = 20, by: str = "all"):
         if self.fail:
             raise ConnectionError("bolt down")
-        return {
-            "fen_norm": fen,
-            "moves": [
-                {"relationship": "PLAYED_MOVE", "uci_move": "e2e4", "san_move": "e4", "total_games": 9, "wins": 5, "draws": 2, "losses": 2},
-                {"relationship": "THEORY_MOVE", "uci_move": "d2d4", "san_move": "d4"},
-            ],
-        }
+        self.last_by = by
+        moves = [
+            {"relationship": "PLAYED_MOVE", "by": "opponent", "uci_move": "g1f3", "san_move": "Nf3", "games": 30, "wins": 10, "draws": 5, "losses": 15},
+            {"relationship": "PLAYED_MOVE", "by": "owner", "uci_move": "e2e4", "san_move": "e4", "games": 9, "wins": 5, "draws": 2, "losses": 2, "avg_cp_loss": 12},
+            {"relationship": "PLAYED_MOVE", "by": "owner", "uci_move": "c2c4", "san_move": "c4", "games": 2, "wins": 1, "draws": 0, "losses": 1},
+            {"relationship": "THEORY_MOVE", "uci_move": "d2d4", "san_move": "d4"},
+        ]
+        if by == "theory":
+            moves = [m for m in moves if m["relationship"] == "THEORY_MOVE"]
+        elif by != "all":
+            moves = [m for m in moves if m.get("by") == by]
+        return {"fen_norm": fen, "moves": moves[:limit]}
+
+    def get_theory_exits(self, limit: int = 20, by: str = "owner"):
+        return {"by": by, "exits": [{"played_uci": "c2c4", "games": 3, "limit": limit}]}
 
     def close(self) -> None:
         return None
@@ -319,11 +327,12 @@ def test_api_errors_map_to_safe_messages() -> None:
 def test_offline_position_answer_uses_engine_and_graph() -> None:
     events = list(OfflineProvider().run(request(), make_ctx()))
     tools = [e["tool"] for e in events if e["type"] == "tool_start"]
-    assert tools == ["analyze_position", "get_position_moves"]
+    assert tools == ["analyze_position", "get_position_moves", "get_position_moves"]
     text = "".join(e["text"] for e in events if e["type"] == "text")
     assert "EVAL: +0.35 for White (side to move), Stockfish depth 6." in text
     assert "MOVE: e4" in text
-    assert "most often e4 (9 times, 5W 2D 2L)" in text
+    # Only the owner's moves count as "your games"; the opponent's 30 games of Nf3 do not.
+    assert "you moved from here in 11 games; most often e4 (9 games, 5W 2D 2L, average loss 12 cp)" in text
     assert "Theory here: d4." in text
     assert "Offline evidence mode" in text
     assert text.rstrip().endswith("PLAY: e2e4 e7e5 g1f3")
@@ -409,7 +418,7 @@ def test_unknown_tool_and_extra_arguments_are_rejected() -> None:
 
 def test_tool_definitions_are_closed_and_untitled() -> None:
     definitions = tool_definitions()
-    assert len({d["name"] for d in definitions}) == len(definitions) == 12
+    assert len({d["name"] for d in definitions}) == len(definitions) == 14
     for definition in definitions:
         schema = definition["input_schema"]
         assert schema["type"] == "object"
@@ -501,3 +510,29 @@ def test_position_questions_are_not_course_questions(question: str) -> None:
     from backend.coach.providers import COURSE_QUESTION
 
     assert not COURSE_QUESTION.search(question)
+
+
+def test_graph_tools_pass_the_mover_filter_and_reject_unknown_values() -> None:
+    ctx = make_ctx()
+    assert run_tool("get_position_moves", {"fen": START, "by": "owner"}, ctx).ok
+    assert ctx.neo4j().last_by == "owner"
+    assert not run_tool("get_position_moves", {"fen": START, "by": "everyone"}, ctx).ok
+
+    exits = run_tool("get_theory_exits", {}, ctx)
+    assert exits.ok
+    assert exits.data == {"by": "owner", "exits": [{"played_uci": "c2c4", "games": 3, "limit": 10}]}
+    assert not run_tool("get_theory_exits", {"limit": 50}, ctx).ok
+
+
+def test_offline_position_answer_without_owner_moves_still_lists_theory() -> None:
+    class NoOwnerMoves(FakeNeo4j):
+        def get_position_moves(self, fen: str, limit: int = 20, by: str = "all"):
+            result = super().get_position_moves(fen, limit, by)
+            result["moves"] = [m for m in result["moves"] if m.get("by") != "owner"]
+            return result
+
+    pg, graph, sf = FakePostgres(), NoOwnerMoves(), FakeStockfish()
+    ctx = ToolContext(postgres=lambda: pg, neo4j=lambda: graph, stockfish=lambda: sf, player=OWNER)
+    text = "".join(e["text"] for e in OfflineProvider().run(request(), ctx) if e["type"] == "text")
+    assert "you never had the move in this position" in text
+    assert "Theory here: d4." in text

@@ -20,13 +20,13 @@ A native graph database stores relationships as **index-free adjacency pointers*
 
 Every element in our Neo4j chess graph is built from four fundamental building blocks:
 
-* **Nodes (Vertices):** The entities or states in the domain (drawn as circles). In our architecture, a node represents a board snapshot (`Position`), an opening classification (`Opening`), an endgame category (`EndgamePattern`), or a historical match (`Game`).
+* **Nodes (Vertices):** The entities or states in the domain (drawn as circles). In our architecture, a node represents a board snapshot (`Position`), an opening classification (`Opening`), an endgame category (`EndgamePattern`), or a historical match (`Game`), a Chess.com account (`Player`), or an opening family (`OpeningFamily`).
 
-* **Labels:** Tags that group nodes by their role (e.g., `:Position`, `:Opening`, `:EndgamePattern`, `:Game`).
+* **Labels:** Tags that group nodes by their role (e.g., `:Position`, `:Opening`, `:EndgamePattern`, `:Game`, `:Player`).
 
 * **Relationships (Edges):** Directed, named arrows connecting two nodes (e.g., `(:Position)-[:PLAYED_MOVE]->(:Position)`). Relationships always have a start node, an end node, and a direction.
 
-* **Properties (Key-Value Attributes):** Metadata stored inside both **Nodes** *and* **Relationships**. To eliminate any notation ambiguity (for instance, knowing immediately that `e4` or `e2e4` moved a `"Pawn"` while `Nf3` moved a `"Knight"`), we store `moved_piece`, `from_square`, `to_square`, and `is_capture` directly on the move relationship as well as `last_moved_piece` on the resulting `(:Position)` node.
+* **Properties (Key-Value Attributes):** Metadata stored inside both **Nodes** *and* **Relationships**. To eliminate any notation ambiguity (for instance, knowing immediately that `e4` or `e2e4` moved a `"Pawn"` while `Nf3` moved a `"Knight"`), we store `moved_piece`, `from_square`, `to_square`, `promotion`, `is_capture` and `is_check` directly on the move relationship.
 
 ### Why Use a Graph Database Here Instead of Only PostgreSQL ?
 
@@ -66,91 +66,129 @@ NEO4J_PASSWORD=your_neo4j_password
 
 ---
 
-## Schema Constraints & Indexes
+## Load the graph
 
-Unlike PostgreSQL, Neo4j does not require `CREATE TABLE` statements. Instead, run the following **Cypher** commands in Neo4j Browser to enforce node uniqueness and index fast graph traversals before running `neo4j_load.py`:
+The loader reads PostgreSQL, builds every row in Python (`transform.py`, unit
+tested), then writes in batches (`write.py`). It creates the constraints and
+indexes itself.
 
-```cypher
-CREATE CONSTRAINT position_fen_unique IF NOT EXISTS
-FOR (p:Position) REQUIRE p.fen_norm IS UNIQUE;
-
-CREATE CONSTRAINT opening_epd_unique IF NOT EXISTS
-FOR (o:Opening) REQUIRE o.epd_norm IS UNIQUE;
-
-CREATE CONSTRAINT endgame_type_unique IF NOT EXISTS
-FOR (e:EndgamePattern) REQUIRE e.endgame_type IS UNIQUE;
-
-CREATE CONSTRAINT game_id_unique IF NOT EXISTS
-FOR (g:Game) REQUIRE g.game_id IS UNIQUE;
-
-CREATE INDEX position_piece_count_idx IF NOT EXISTS
-FOR (p:Position) ON (p.piece_count);
-
-CREATE INDEX position_material_idx IF NOT EXISTS
-FOR (p:Position) ON (p.material_sig);
-
-CREATE INDEX opening_eco_idx IF NOT EXISTS
-FOR (o:Opening) ON (o.eco_code);
-
-CREATE INDEX game_type_idx IF NOT EXISTS
-FOR (g:Game) ON (g.game_type);
+```bash
+uv run python etl/neo4j_db/neo4j_load.py --dry-run   # read and transform only; print row counts
+uv run python etl/neo4j_db/neo4j_load.py --reset     # delete the chess labels, then load
 ```
+
+The Neo4j database is shared with other projects. `--reset` runs
+`MATCH (n:<Label>) CALL (n) { DETACH DELETE n } IN TRANSACTIONS` for the chess
+labels only: `Position`, `Game`, `Opening`, `OpeningFamily`, `EndgamePattern`,
+`Player`, `ChessGraphMeta`. The loader counts every label before and after and
+exits with status 2 if a non-chess label changed. Without `--reset`, every
+write is a `MERGE`, so a rerun updates rows in place but leaves edges that the
+new data no longer produces.
+
+`CHESS_USERNAME` must be set in `.env`: it decides which moves are the
+owner's. Usernames are stored on `Player` nodes in the local database only; the
+MCP tools never return them.
 
 ---
 
-## Graph Data Model Overview
+## Schema v2
 
-### Node Properties
+```text
+(:Player)-[:PLAYED_AS]->(:Game)-[:REACHED {ply}]->(:Position)
+(:Game)-[:OPENED_WITH]->(:Opening)-[:IN_FAMILY]->(:OpeningFamily)
+(:Game)-[:LEFT_THEORY_AT | ENTERED_ENDGAME]->(:Position)
+(:Position)-[:PLAYED_MOVE {by} | THEORY_MOVE | ENGINE_BEST]->(:Position)
+(:Position)-[:CLASSIFIED_AS | IN_OPENING]->(:Opening)
+(:Position)-[:HAS_ENDGAME_TYPE]->(:EndgamePattern)
+(:Position)-[:MISTAKE_IN]->(:Game)
+(:ChessGraphMeta {schema_version: 2})
+```
 
-| Label | Key Properties |
+### Constraints and indexes
+
+| Kind | Target |
 | :--- | :--- |
-| **`(:Position)`** | `fen_norm`, `turn_color`, `piece_count`, `material_sig`, `last_moved_piece` (*Pawn*, *Knight*, *Bishop*, *Rook*, *Queen*, *King*), `last_move_san`, `eval_cp`, `best_move_uci`, `visit_count` |
-| **`(:Opening)`** | `epd_norm`, `opening_id`, `eco_volume`, `eco_code`, `opening_name`, `pgn_line`, `uci_line` |
-| **`(:EndgamePattern)`** | `endgame_type` (*KNvK*, *KRvKP*, etc.), `piece_count`, `benchmark_positions`, `avg_player_elo`, `sample_fen`, `sample_human_move` |
-| **`(:Game)`** | `game_id`, `game_type`, `played_date`, `user_color`, `user_elo`, `opponent_elo`, `user_outcome`, `result`, `eco_code`, `opening_name`, `total_plies` |
+| unique | `Position.fen_norm`, `Opening.epd_norm`, `EndgamePattern.endgame_type`, `Game.game_id`, `Player.username`, `OpeningFamily.name` |
+| index | `Position.piece_count`, `Position.material_sig`, `Position.phase`, `Opening.eco_code`, `Game.game_type`, `Game.played_date` |
+| relationship index | `PLAYED_MOVE.by` |
 
-### Relationship Properties
+### Nodes
 
-| Relationship | Direction | Key Properties |
+| Label | Properties |
+| :--- | :--- |
+| **`(:Position)`** | `fen_norm`, `turn_color`, `piece_count` (kings included), `material_sig`, `phase`, `is_theory`, `visit_games`, `eval_cp`, `eval_samples`, `best_move_uci`, `best_move_san` |
+| **`(:Game)`** | `game_id`, `game_type`, `played_date` (date), `user_color`, `user_elo`, `opponent_elo`, `rating_band`, `user_outcome`, `result`, `termination`, `time_control`, `base_time_sec`, `increment_sec`, `eco_code`, `opening_name`, `total_plies` |
+| **`(:Player)`** | `username`, `is_owner` |
+| **`(:Opening)`** | `epd_norm`, `opening_id`, `eco_volume`, `eco_code`, `opening_name`, `family`, `pgn_line`, `uci_line` |
+| **`(:OpeningFamily)`** | `name` |
+| **`(:EndgamePattern)`** | `endgame_type` (*KRvK*, *KRPvKR*, …), `piece_count`, `benchmark_positions`, `avg_player_elo`, `sample_fen`, `sample_human_move` |
+| **`(:ChessGraphMeta)`** | `name: 'chessgraph'`, `schema_version`, `loaded_at`, `count_<step>` for every write step |
+
+### Relationships
+
+| Relationship | Direction | Properties |
 | :--- | :--- | :--- |
-| **`[:PLAYED_MOVE]`** | `(:Position) -> (:Position)` | `uci_move`, `san_move`, **`moved_piece`** (*Pawn*, *Knight*, etc.), **`from_square`**, **`to_square`**, **`is_capture`**, `total_games`, `wins`, `losses`, `draws`, `win_rate_pct`, `avg_cp_loss`, `avg_clock_sec`, `best_move_uci` |
-| **`[:THEORY_MOVE]`** | `(:Position) -> (:Position)` | `uci_move`, `san_move`, **`moved_piece`**, **`from_square`**, **`to_square`**, **`is_capture`**, `eco_code` |
-| **`[:CLASSIFIED_AS]`** | `(:Position) -> (:Opening)` | Links book FEN positions to their ECO classification node |
-| **`[:HAS_ENDGAME_TYPE]`** | `(:Position) -> (:EndgamePattern)` | `benchmark_move_uci`, `elo_tier`, `player_elo` |
-| **`[:BLUNDERED_IN]`** | `(:Position) -> (:Game)` | `ply_number`, `played_san`, `played_uci`, **`moved_piece`**, `best_move_uci`, `cp_loss`, `clock_rem_sec` |
+| **`[:PLAYED_MOVE]`** | `(:Position) -> (:Position)` | key `uci_move` + `by` (`owner`/`opponent`); `san_move`, `moved_piece`, `from_square`, `to_square`, `promotion`, `is_capture`, `is_check`, `games`, `times`, `wins`, `draws`, `losses`, `score_pct` (mover's side), `avg_cp_loss`, `avg_eval_after` (mover's side), `inaccuracies`, `mistakes`, `blunders`, `is_engine_best` |
+| **`[:THEORY_MOVE]`** | `(:Position) -> (:Position)` | key `uci_move`; `san_move`, move metadata, `eco_codes` (every ECO line that plays it) |
+| **`[:ENGINE_BEST]`** | `(:Position) -> (:Position)` | `uci`, `san`: most frequent stored Stockfish best move, when its target is in the graph |
+| **`[:CLASSIFIED_AS]`** | `(:Position) -> (:Opening)` | the position is the opening's EPD |
+| **`[:IN_OPENING]`** | `(:Position) -> (:Opening)` | `ply`: the position lies on that opening's line |
+| **`[:IN_FAMILY]`** | `(:Opening) -> (:OpeningFamily)` | |
+| **`[:HAS_ENDGAME_TYPE]`** | `(:Position) -> (:EndgamePattern)` | `benchmark: true` + `benchmark_move_uci`, `elo_tier`, `player_elo` for Atlas samples; `from_games: true` for game positions of six pieces or fewer |
+| **`[:PLAYED_AS]`** | `(:Player) -> (:Game)` | `color`, `elo` |
+| **`[:REACHED]`** | `(:Game) -> (:Position)` | `ply` (0 = start), `owner_to_move` |
+| **`[:OPENED_WITH]`** | `(:Game) -> (:Opening)` | `ply` of the deepest named opening reached |
+| **`[:LEFT_THEORY_AT]`** | `(:Game) -> (:Position)` | `ply`, `played_uci`, `played_san`, `by`: first move that is not a book move from that position |
+| **`[:ENTERED_ENDGAME]`** | `(:Game) -> (:Position)` | `ply`, `material_sig` of the first endgame-phase position |
+| **`[:MISTAKE_IN]`** | `(:Position) -> (:Game)` | owner moves only: `ply`, `severity`, `cp_loss`, `mate_swing`, `played_uci`, `played_san`, `best_uci` |
+
+`ENTERED_ENDGAME` points at the position, not at an `EndgamePattern`: the
+Endgame Atlas only covers some material, while every game has a first endgame
+position. Follow `HAS_ENDGAME_TYPE` from that position when a hub exists.
+
+### Rules
+
+- **Perspective.** `Position.eval_cp` is from the side to move: the average
+  `eval_cp_before` of moves played from the position, else the average negated
+  `eval_cp_after` of moves that reached it. `PLAYED_MOVE` results and
+  `avg_eval_after` are from the side that moved.
+- **Severity** on stored `cp_loss`: inaccuracy 50, mistake 100, blunder 300.
+  Mate scores are stored as +/-10000, so `mate_swing` marks 5,000 cp or more.
+- **Material signature** uses the Endgame Atlas notation: White first, each side
+  K then Q, R, B, N, P (`KQBvKRN`, `KvKPP`). It equals `endgame_type` for the
+  same material.
+- **Phase** follows a simplified Lichess divider: endgame when queens, rooks,
+  bishops and knights number 6 or fewer; opening when they number more than 10
+  and each side has at least 4 pieces on its back rank; middlegame otherwise.
+- **Clocks.** The PGN exports have no `%clk` comments, so `clock_rem_sec` is
+  empty in PostgreSQL and the graph has no clock fields.
 
 ---
 
-## Verification Queries in Neo4j Browser
-
-After running `neo4j_load.py`, execute these Cypher queries in Neo4j Browser to explore the graph visually:
+## Verification queries
 
 ```cypher
-// Count all loaded nodes by label
-MATCH (n)
-RETURN labels(n)[0] AS NodeType, count(n) AS TotalCount
-ORDER BY TotalCount DESC;
+// Load metadata
+MATCH (m:ChessGraphMeta {name: 'chessgraph'}) RETURN m;
 
-// Visualize your Queen's Gambit Declined (D35) repertoire & book transpositions
-MATCH path = (p1:Position)-[r:PLAYED_MOVE|THEORY_MOVE*1..4]->(p2:Position)-[:CLASSIFIED_AS]->(o:Opening)
-WHERE o.eco_code STARTS WITH 'D3'
-RETURN path
-LIMIT 50;
+// REACHED = stored moves + one start position per game
+MATCH (:Game)-[r:REACHED]->() RETURN count(r);
 
-// Visualize your Blunder Hotspots (avg_cp_loss >= 100) and the games they happened in
-MATCH path = (p1:Position)-[r:PLAYED_MOVE]->(p2:Position)
-MATCH blunder = (p1)-[:BLUNDERED_IN]->(g:Game)
-WHERE r.avg_cp_loss >= 100
-RETURN path, blunder
-LIMIT 40;
+// Game positions linked to Endgame Atlas hubs
+MATCH (p:Position)-[:HAS_ENDGAME_TYPE {from_games: true}]->(e:EndgamePattern)
+RETURN e.endgame_type, count(p) AS positions ORDER BY positions DESC LIMIT 10;
 
-// Visualize your Games transitioning into Endgame Pattern Hubs
-MATCH path = (p:Position)-[:HAS_ENDGAME_TYPE]->(e:EndgamePattern)
-WHERE p.visit_count >= 1
-RETURN path
-LIMIT 50;
+// Where your games leave book most often
+MATCH (g:Game)-[r:LEFT_THEORY_AT {by: 'owner'}]->(p:Position)
+RETURN r.played_san, p.fen_norm, count(g) AS games ORDER BY games DESC LIMIT 10;
+
+// Your moves versus opponents' from the start position
+MATCH (:Position {fen_norm: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -'})-[r:PLAYED_MOVE]->()
+RETURN r.by, r.san_move, r.games, r.score_pct ORDER BY r.games DESC LIMIT 10;
+
+// Positions where you went wrong in several games
+MATCH (p:Position)-[m:MISTAKE_IN]->(g:Game)
+WITH p, count(DISTINCT g) AS games, avg(m.cp_loss) AS avg_loss
+WHERE games >= 3
+RETURN p.fen_norm, games, round(avg_loss) AS avg_loss ORDER BY games DESC LIMIT 10;
 ```
-
-## Result
-
-![Neo4j visualization](../../img/neo4j_viz.png)

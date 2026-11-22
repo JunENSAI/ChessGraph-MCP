@@ -28,6 +28,8 @@ def test_server_registers_only_curated_read_only_tools() -> None:
         "get_game_blunders",
         "get_recurring_blunder_positions",
         "get_endgame_context",
+        "get_games_through_position",
+        "get_theory_exits",
     }
     assert all(tool.annotations.read_only_hint for tool in tools.values())  # type: ignore[union-attr]
     assert all(not tool.annotations.destructive_hint for tool in tools.values())  # type: ignore[union-attr]
@@ -55,9 +57,27 @@ def test_validation_errors_are_exposed_as_tool_errors() -> None:
         tool.fn(FEN, 0)  # type: ignore[union-attr]
 
 
-def test_schema_resource_documents_required_semantic_caveats() -> None:
-    assert "visit_count" in GRAPH_SCHEMA_RESOURCE
-    assert "material_sig" in GRAPH_SCHEMA_RESOURCE
-    assert "EndgamePattern.endgame_type" in GRAPH_SCHEMA_RESOURCE
-    assert "BLUNDERED_IN" in GRAPH_SCHEMA_RESOURCE
-    assert "Different games do not collide" in GRAPH_SCHEMA_RESOURCE
+def test_schema_resource_documents_v2_semantics() -> None:
+    for text in (
+        "schema v2",
+        "PLAYED_MOVE {uci_move, by}",
+        "mover's",
+        "side to move",
+        "MISTAKE_IN",
+        "REACHED",
+        "LEFT_THEORY_AT",
+        "White first",
+        "no clock",
+    ):
+        assert text in GRAPH_SCHEMA_RESOURCE, text
+    assert "BLUNDERED_IN" not in GRAPH_SCHEMA_RESOURCE
+    assert "visit_count" not in GRAPH_SCHEMA_RESOURCE
+
+
+def test_new_tools_delegate_with_their_filters() -> None:
+    repository = Mock()
+    tools = _tools(create_server(repository))
+    tools["get_theory_exits"].fn(5, "all")  # type: ignore[union-attr]
+    tools["get_game_blunders"].fn(3, 10, "blunder")  # type: ignore[union-attr]
+    repository.get_theory_exits.assert_called_once_with(5, "all")
+    repository.get_game_blunders.assert_called_once_with(3, 10, "blunder")
