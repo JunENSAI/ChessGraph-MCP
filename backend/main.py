@@ -1,6 +1,6 @@
 """HTTP retrieval API for the coach UI.
 
-Hermes keeps the MCP servers. This process calls the same repositories for
+The MCP servers serve Claude. This process calls the same repositories for
 the facts the interface renders before a question is asked: games, opening
 rows, graph context, and a bounded Stockfish search. It does not explain.
 """

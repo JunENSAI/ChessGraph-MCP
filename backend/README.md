@@ -1,7 +1,7 @@
 # ChessGraph retrieval API
 
-The UI reads facts from this process. Hermes keeps the MCP servers and explains
-what those tools return. Both call the repositories in `chess_mcp/`.
+The UI reads facts from this process. The MCP servers expose the same
+repositories in `chess_mcp/` to Claude.
 
 ```bash
 uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
@@ -29,4 +29,4 @@ The Vite dev server proxies `/api` to `BACKEND_URL` (default
 | `POST /api/engine/validate` | Legal replay of a UCI line |
 
 This process starts its own Stockfish engine the first time an `/api/engine`
-route is called. The Stockfish MCP server keeps a separate engine for Hermes.
+route is called. The Stockfish MCP server keeps its own separate engine.

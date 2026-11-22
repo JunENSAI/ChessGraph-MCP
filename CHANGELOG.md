@@ -119,3 +119,94 @@ New tests:
   cannot exceed 4; the default data folder.
 - `tests/test_stockfish_engine.py`: `validate_line` reports the ply of an
   illegal move without starting the engine.
+
+## Batch 2: Claude Code plugin replaces the Hermes host
+
+### Why
+
+- The MCP host moves from Hermes-Agent to Claude Code.
+- Hermes was never fully configured locally: `~/.hermes` had no `config.yaml`
+  and no seeds.
+- Packaging the servers, the persona, and the coaching workflows as a plugin
+  makes them installable and repeatable.
+
+### Changed
+
+**Plugin `plugins/chessgraph/`**
+
+- `.claude-plugin/plugin.json` declares one setting, `userConfig.chessgraph_home`
+  (type `directory`): the path of the checkout.
+- `.mcp.json` starts `postgres`, `neo4j` and `stockfish` with
+  `uv run --quiet --directory ${user_config.chessgraph_home} chessgraph-<name>-mcp`.
+  The servers read the repository `.env`, so no credential is stored in the
+  plugin.
+- `agents/chess-coach.md` carries the persona, evidence order and evidence
+  rules from the old `agent/SOUL.md`. Its tools are limited to
+  `mcp__plugin_chessgraph_{postgres,neo4j,stockfish}__*`.
+- Five skills, each naming the exact tools and the "missing evidence" rule:
+  - `explain-position` (FEN to evaluation, move, why, and your history);
+  - `review-game` (three largest mistakes, same-root `compare_move`, one
+    lesson);
+  - `training-plan` (coaching brief and record);
+  - `opening-check` (your moves against theory, with scores);
+  - `status`.
+
+**Marketplace**
+
+- `.claude-plugin/marketplace.json` at the repository root makes the checkout
+  installable with `claude plugin marketplace add <repo>` and
+  `claude plugin install chessgraph@chessgraph`.
+
+**New commands**
+
+- `uv run chessgraph-status` (`chess_mcp/status.py`) prints whether
+  PostgreSQL, Neo4j and Stockfish are reachable, with counts. It only reads,
+  never prints the account name, and reports a down service as `DOWN` without
+  showing the exception text.
+- `uv run chessgraph-smoke` (`chess_mcp/smoke.py`) starts each MCP server over
+  stdio with the official MCP client, the way a host does. It compares each
+  tool list with the expected contract and calls one cheap tool per server.
+  No model or API key is involved.
+
+**Removed**
+
+- `agent/`: `SOUL.md`, `MEMORY.md`, `USER.md`, `README.md` and
+  `hermes-mcp.example.yaml`.
+- `AGENTS.md` was renamed to `CLAUDE.md` and rewritten for Claude Code. The
+  player facts from the memory seeds moved there, without the account name.
+
+**Docs**
+
+- `README.md` has a new step 4, "Install the Claude Code plugin". The
+  architecture diagram, the sequence diagram and the scope now name Claude.
+- New `docs/plugin.md` covers the layout, install, server launch, testing
+  without a model, and ideas for later.
+- Hermes host text was removed from `docs/mcp.md`, `chess_mcp/README.md`,
+  `chess_mcp/stockfish/README.md`, `backend/README.md` and `backend/main.py`.
+
+**Not yet changed (Batch 3)**
+
+- The UI coach panel still posts to the `/hermes-api` Vite proxy.
+
+### Tested
+
+| Command | Result |
+| --- | --- |
+| `claude plugin validate --strict plugins/chessgraph` | passed. One plugin-directory advisory remains: no icon, which only matters for catalog submission. |
+| `claude plugin validate --strict .` (marketplace) | passed |
+| Isolated install with `CLAUDE_CONFIG_DIR` set to a throwaway folder: `marketplace add`, `install`, `configure --values-stdin`, then `claude plugin details` | 5 skills, 1 agent, 3 MCP servers, about 392 always-on tokens |
+| `claude mcp list` from `/tmp` in that isolated config | `plugin:chessgraph:postgres`, `neo4j` and `stockfish` all **Connected**, confirming `${user_config.chessgraph_home}` substitution |
+| `uv run chessgraph-status` | postgres 4,595 games / 388,522 moves (all evaluated); neo4j Position 360,182, Game 4,595, Opening 3,704, EndgamePattern 848; Stockfish 17.1 |
+| `uv run chessgraph-smoke` | PASS for all three servers (9, 6 and 3 tools); `validate_line` returned e4 e5 Nf3 |
+| `uv run pytest` | 80 passed, 3 skipped |
+| Integration tests | 3 passed |
+| Account-name scan over the staged files | no match |
+
+New tests in `tests/test_status_and_smoke.py`:
+
+- a failing service is reported without leaking the exception text;
+- the rendered status format;
+- the smoke contract equals each server's registered tools;
+- smoke summaries never include the username;
+- the JSON fallback parser;
+- unknown server names are rejected.

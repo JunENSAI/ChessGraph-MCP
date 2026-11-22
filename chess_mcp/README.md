@@ -11,12 +11,12 @@ an agent controlled access to:
 
 - Stockfish engine analysis and legal-line validation.
 
-The package does not contain the coaching model itself. Hermes-Agent or another
-MCP host decides which tools to call and turns their structured evidence into a
+The package does not contain the coaching model itself. Claude Code (through
+the `chessgraph` plugin) or another MCP host decides which tools to call and turns their structured evidence into a
 coaching response.
 
 ```text
-Hermes-Agent
+Claude Code + chessgraph plugin
 ├── PostgreSQL MCP ── personal games, metrics, openings, endgames
 ├── Neo4j MCP ─────── position graph, theory, transpositions, patterns
 └── Stockfish MCP ─── evaluation, candidate lines, move comparison
@@ -145,7 +145,7 @@ The configured entry points are:
 
 They are intended to be launched by an MCP host, not used as interactive
 terminal programs. See the repository-level `docs/mcp.md` and
-`agent/hermes-mcp.example.yaml` for setup and Hermes-Agent configuration.
+`docs/plugin.md` for the Claude Code plugin that launches them.
 
 ## Extending the package
 
