@@ -385,7 +385,10 @@ def graph_context(context: Any | None, ctx: ToolContext) -> str | None:
     """
     if context is None:
         return None
-    summary = redact(style_summary(context), ctx.player)
+    try:
+        summary = redact(style_summary(context), ctx.player)
+    except Exception:  # noqa: BLE001 - an unreadable context is missing evidence, not a failed answer
+        return None
     text = json.dumps(summary, separators=(",", ":"), default=str)
     for key in ("nearby_mistakes", "recent_games", "opponent_moves"):
         while len(text) > GRAPH_CONTEXT_CHARS and summary[key]:

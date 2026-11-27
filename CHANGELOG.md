@@ -1219,3 +1219,50 @@ In the browser:
   - Start on day 4 set Stockfish to 1800.
 - **375×812:** no horizontal scroll.
 - The test ticks were cleared from the preview browser afterwards.
+
+## Review fixes for pull request 4
+
+### Fixed
+
+- **Play days could stall.** When a scripted line ended on the opponent's
+  move, `playScripted` asked Stockfish to reply at once, so it played your move
+  for you. The board then waited for a side nobody played. The live Caro-Kann
+  line ends on White's move, so days 4 and 6 hit this. Now Stockfish only
+  replies when the side to move is not yours. Otherwise the coach tells you it
+  is your move (`ui/src/views/TrainingView.tsx`).
+- **Cached coach answers drew no arrows.** `askCoach` returned a cached answer
+  with its lines but never called `onLines`, so the board kept no arrows, or
+  the previous answer's arrows. It now calls `onLines` with the lines rebased
+  on the current board (`ui/src/services/coach.ts`).
+- **`graph_context` is guarded again.** A style context the summary cannot read
+  now returns None, meaning the graph evidence is missing. Before this fix it
+  failed the whole answer, a guard that batch 9's refactor had dropped
+  (`backend/coach/tools.py`).
+- **Play days keep your strength.** They no longer replace the strength chosen
+  on the new-game card. Unless you picked one, that level is already the one
+  for your average rating.
+- **Dead code removed.** The review-day branch in `startDay` was unreachable.
+
+### Left as is
+
+- Offline mode tags the human line from your own moves only. Claude mode also
+  counts your opponents' moves. Matching them needs one more graph read in
+  offline mode.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 193 passed, 9 skipped |
+| `cd ui && npx tsc -b && npm test` | 111 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npm run build` | built |
+
+New tests:
+
+- `tests/test_coach.py`: an unreadable context is missing evidence.
+- `ui/src/services/coach.test.ts`: a cached answer replays its lines through
+  `onLines`.
+
+The play-day fix lives inside the board component, which has no component test
+in this project. It was not checked in the browser in this pass.

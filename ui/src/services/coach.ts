@@ -336,7 +336,12 @@ export async function askCoach(
   store: KeyValueStore | null = browserStore(),
 ): Promise<CoachMessage> {
   const hit = cachedAnswer(context.mode, context.fen, question, store)
-  if (hit) return present(hit.answer, hit.mode ?? 'offline', true, hit.lines)
+  if (hit) {
+    // A cached answer draws its lines too, from the board as it is now.
+    const lines = hit.lines ? { ...hit.lines, fen: context.fen } : undefined
+    if (lines) handlers.onLines?.(lines)
+    return present(hit.answer, hit.mode ?? 'offline', true, lines)
+  }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)

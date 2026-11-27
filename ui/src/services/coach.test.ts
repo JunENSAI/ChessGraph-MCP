@@ -214,9 +214,12 @@ describe('askCoach', () => {
     expect(message.play).toEqual([])
 
     vi.stubGlobal('fetch', vi.fn())
-    const cached = await askCoach('Best move?', context, {}, store)
+    const replayed: unknown[] = []
+    const cached = await askCoach('Best move?', context, { onLines: next => replayed.push(next) }, store)
     expect(cached.cached).toBe(true)
     expect(cached.lines).toEqual(expected)
+    // The board draws a cached answer's lines as it does a fresh one's.
+    expect(replayed).toEqual([expected])
   })
 
   it('reads an older cached answer that has no mode', async () => {

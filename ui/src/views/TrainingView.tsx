@@ -300,8 +300,11 @@ export function TrainingView({ active = true }: { active?: boolean }) {
       setStep(next)
       setOpponentThinking(false)
       if (next === lesson.line.length && lesson.engineAfter) {
+        // The line ended on the opponent's move: Stockfish takes the opponent's side from here,
+        // so it replies only after your move (handleMove), never in your place.
         setAgainstEngine(true)
-        engineReply(applied.fen)
+        if (sideToMove(applied.fen) !== (lesson.userColor === 'white' ? 'w' : 'b')) engineReply(applied.fen)
+        else coach.say('The line is over. Your move: Stockfish plays the other side from here.')
       } else if (next === lesson.line.length) {
         coach.say('Lesson complete. Choose it again to drill the line.')
       }
@@ -658,12 +661,12 @@ export function TrainingView({ active = true }: { active?: boolean }) {
     } else if (day.kind === 'mistakes') {
       startMistake(day, 0)
     } else if (day.kind === 'play') {
-      if (day.opponent_elo !== null) setStrengthId(levelForRating(day.opponent_elo).id)
+      // Stockfish keeps the strength on the new-game card. Unless you picked one there, that is
+      // already the level for your average rating, which is the program's opponent_elo.
       loadSession({ ...sessionFromTask(dayTask(day, 'opening')), watch: false, engineAfter: true }, true)
       setTab('moves')
-    } else {
-      coach.say(day.goal)
     }
+    // The review day has no board session; its tile shows the goal and Mark done.
   }
 
   const tickDay = (day: number) => {

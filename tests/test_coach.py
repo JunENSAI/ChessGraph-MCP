@@ -461,6 +461,11 @@ def test_graph_context_is_redacted_and_bounded() -> None:
     assert graph_context(None, ctx) is None
 
 
+def test_graph_context_reads_an_unreadable_context_as_missing_evidence() -> None:
+    # A context the summary cannot read is missing graph evidence, not a failed answer.
+    assert graph_context(object(), make_ctx()) is None
+
+
 def _analysis(*first_moves: str) -> dict[str, Any]:
     return {
         "root_player": "black",
