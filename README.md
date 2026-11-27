@@ -483,6 +483,13 @@ The coach has two modes, set by `COACH_MODE` in `.env`:
     - no other MCP servers.
   - It offers only fourteen read-only coach tools. They mirror the MCP
     contracts and run in the API process.
+  - **Three-part answers.** For the current position the coach answers with
+    *Position* (Stockfish eval, whether your games know it, the opening),
+    *Lines* (Stockfish's top 3, drawn on the board as arrows; the one played
+    most here in your games, or the book move, is tagged human; a click on a
+    line shows its whole path) and *For you* (the choice tied to your style).
+    Before answering it reads your profile from the stored games: record,
+    strongest and weakest openings, top repeated mistake.
   - **Graph context (GraphRAG).** Before Claude reads the question, one
     bounded Neo4j read collects your own record around the position: your
     moves and your opponents' moves with results and average loss, the book

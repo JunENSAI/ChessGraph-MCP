@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { SendHorizontal } from 'lucide-react'
 import { ThinkingOrb } from 'thinking-orbs'
@@ -6,11 +6,13 @@ import {
   PHASE_LABEL,
   PHASE_ORB,
   TRACE_SOURCES,
+  type CandidateLine,
   type CoachMessage,
   type CoachMode,
   type CoachPhase,
   type CoachTrace,
 } from '../services/coach'
+import { humanReason, lineColor, lineLabel } from '../lib/lines'
 
 interface CoachPanelProps {
   title: string
@@ -24,6 +26,10 @@ interface CoachPanelProps {
   className?: string
   /** Inside a side-panel tab: no card chrome of its own. */
   embedded?: boolean
+  /** A candidate line chip was clicked: show that line on the board. */
+  onLine?: (message: CoachMessage, line: CandidateLine) => void
+  /** The line the board shows now, to mark its chip. */
+  activeLine?: { messageId: string; rank: number } | null
 }
 
 const SOURCE_LABELS = { postgres: 'Games', neo4j: 'Graph', stockfish: 'Stockfish' }
@@ -46,6 +52,8 @@ export function CoachPanel({
   onAsk,
   className = '',
   embedded = false,
+  onLine,
+  activeLine = null,
 }: CoachPanelProps) {
   const [draft, setDraft] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
@@ -107,6 +115,28 @@ export function CoachPanel({
             >
               {message.role === 'coach' && <div className="message-author">{authorFor(message)}</div>}
               <p>{message.pending && !message.text ? '…' : message.text}</p>
+              {message.lines && message.lines.lines.length > 0 && (
+                <div className="line-chips" role="group" aria-label="Candidate lines: show one on the board">
+                  {message.lines.lines.map(line => {
+                    const active = activeLine?.messageId === message.id && activeLine.rank === line.rank
+                    return (
+                      <button
+                        key={line.rank}
+                        type="button"
+                        className={`line-chip${active ? ' active' : ''}`}
+                        style={{ '--line-color': lineColor(line.rank) } as CSSProperties}
+                        aria-pressed={active}
+                        title={humanReason(line) ?? `Stockfish line ${line.rank}`}
+                        onClick={() => onLine?.(message, line)}
+                      >
+                        <span className="line-rank">{line.rank}</span>
+                        <span className="line-moves">{lineLabel(line, message.lines!.root_player)}</span>
+                        {line.human && <span className="line-tag">human</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
               {message.cached && <div className="demo-note">Cached reply</div>}
             </motion.article>
           ))}

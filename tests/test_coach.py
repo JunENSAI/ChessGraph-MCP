@@ -12,9 +12,19 @@ from fastapi.testclient import TestClient
 
 import backend.coach.providers as providers
 from backend.coach import ClaudeProvider, CoachRequest, OfflineProvider, ToolContext, provider_from_settings
-from backend.coach.prompt import GRAPH_CONTEXT_HEADER, SYSTEM_PROMPT, prompt_text
+from backend.coach.prompt import GRAPH_CONTEXT_HEADER, LINES_HEADER, PROFILE_HEADER, SYSTEM_PROMPT, prompt_text
 from backend.coach.providers import format_score, sdk_error_message
-from backend.coach.tools import GRAPH_CONTEXT_CHARS, TOOLS, graph_context, redact, run_tool, tool_definitions
+from backend.coach.tools import (
+    GRAPH_CONTEXT_CHARS,
+    TOOLS,
+    graph_context,
+    rank_lines,
+    read_style_context,
+    redact,
+    run_tool,
+    style_profile,
+    tool_definitions,
+)
 from chess_mcp.neo4j.models import StyleContext
 from backend.main import create_app
 
@@ -141,13 +151,21 @@ def _line(san: list[str], uci: list[str], value: int = 35) -> dict[str, Any]:
 
 
 class FakeStockfish:
+    fail = False
+
     def analyze_position(self, fen: str, *, limit_type: str, limit_value: int | None, multipv: int):
+        if self.fail:
+            raise RuntimeError("engine down")
         return {
             "fen": fen,
             "root_player": "white",
             "limit": {"type": "depth", "value": limit_value or 6, "unit": "plies"},
             "multipv": multipv,
-            "lines": [_line(["e4", "e5", "Nf3"], ["e2e4", "e7e5", "g1f3"])],
+            "lines": [
+                _line(["e4", "e5", "Nf3"], ["e2e4", "e7e5", "g1f3"]),
+                _line(["d4", "d5", "c4"], ["d2d4", "d7d5", "c2c4"], 30),
+                _line(["Nf3", "Nf6", "g3"], ["g1f3", "g8f6", "g2g3"], 20),
+            ][:multipv],
         }
 
     def compare_move(self, fen: str, played: str, *, limit_type: str, limit_value: int | None):
@@ -228,6 +246,20 @@ def request(**overrides: Any) -> CoachRequest:
 # --------------------------------------------------------------------------- Claude (Agent SDK)
 
 
+PREFETCH = [
+    {"type": "tool_start", "tool": "get_player_profile", "source": "postgres"},
+    {"type": "tool_end", "tool": "get_player_profile", "source": "postgres", "ok": True},
+    {"type": "tool_start", "tool": "get_style_context", "source": "neo4j"},
+    {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": True},
+    {"type": "tool_start", "tool": "analyze_position", "source": "stockfish"},
+    {"type": "tool_end", "tool": "analyze_position", "source": "stockfish", "ok": True},
+]
+
+
+def block(prompt: str, header: str) -> Any:
+    return json.loads(prompt.split(header + "\n", 1)[1].split("\n", 1)[0])
+
+
 def test_claude_streams_text_and_reports_each_tool_call(monkeypatch) -> None:
     calls = script(
         monkeypatch,
@@ -242,11 +274,12 @@ def test_claude_streams_text_and_reports_each_tool_call(monkeypatch) -> None:
     events = collect(ClaudeProvider(), request(), make_ctx())
 
     kinds = [event["type"] for event in events]
-    assert kinds == ["start", "tool_start", "tool_end", "text", "tool_start", "tool_end", "tool_start", "tool_end", "text", "done"]
+    assert kinds[8:] == ["text", "tool_start", "tool_end", "tool_start", "tool_end", "text", "done"]
     assert events[0] == {"type": "start", "mode": "claude", "model": "claude-opus-5-5"}
-    assert events[1] == {"type": "tool_start", "tool": "get_style_context", "source": "neo4j"}
-    assert events[4] == {"type": "tool_start", "tool": "get_player_summary", "source": "postgres"}
-    assert events[6]["source"] == "stockfish"
+    assert events[1:7] == PREFETCH
+    assert events[7]["type"] == "lines"
+    assert events[9] == {"type": "tool_start", "tool": "get_player_summary", "source": "postgres"}
+    assert events[11]["source"] == "stockfish"
     assert all(event["ok"] for event in events if event["type"] == "tool_end")
     assert events[-1] == {"type": "done", "mode": "claude", "stop_reason": "end_turn"}
 
@@ -280,7 +313,7 @@ def test_invalid_tool_input_returns_an_error_result_to_claude(monkeypatch) -> No
     calls = script(monkeypatch, [("tool", "analyze_position", {"multipv": 9}), result()])
     events = collect(ClaudeProvider(), request(), make_ctx())
 
-    assert [e["ok"] for e in events if e["type"] == "tool_end"] == [True, False]
+    assert [e["ok"] for e in events if e["type"] == "tool_end"] == [True, True, True, False]
     tool_result = calls[1]["result"]
     assert tool_result["is_error"] is True
     assert "fen" in tool_result["content"][0]["text"]
@@ -340,37 +373,76 @@ def test_sdk_errors_map_to_safe_messages(monkeypatch) -> None:
     assert sdk_error_message(RuntimeError("x")) == "The coach failed (RuntimeError)."
 
 
-def test_graph_context_is_fetched_first_and_put_in_the_prompt(monkeypatch) -> None:
+def test_evidence_is_fetched_in_order_and_put_in_the_prompt(monkeypatch) -> None:
     calls = script(monkeypatch, [result()])
     events = collect(ClaudeProvider(), request(), make_ctx())
 
-    assert events[1:3] == [
-        {"type": "tool_start", "tool": "get_style_context", "source": "neo4j"},
-        {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": True},
-    ]
+    # Games, then graph, then Stockfish (the CLAUDE.md evidence order), then the lines for the board.
+    assert events[1:7] == PREFETCH
+    lines_event = events[7]
+    assert lines_event["type"] == "lines"
+    assert lines_event["root_player"] == "white" and lines_event["depth"] == 6
+    assert [line["uci"][0] for line in lines_event["lines"]] == ["e2e4", "d2d4", "g1f3"]
+    assert [line["human"] for line in lines_event["lines"]] == [True, False, False]  # e4: 9 of your games
+
     prompt = calls[0]["prompt"]
-    block = prompt.split(GRAPH_CONTEXT_HEADER + "\n", 1)[1].split("\n", 1)[0]
-    graph = json.loads(block)
+    profile = block(prompt, PROFILE_HEADER)
+    assert profile["record"]["games_played"] == 12
+    assert profile["weakest_opening"]["family"] == "Sicilian Defense"
+    assert profile["repeated_mistake"] == {"ply": 6, "played_san": "a6", "best_san": "e6", "times": 4, "average_cp_loss": 80}
+    graph = block(prompt, GRAPH_CONTEXT_HEADER)
     assert graph["your_moves"][0] == {"move": "e4", "uci": "e2e4", "games": 9, "wins": 5, "draws": 2, "losses": 2, "avg_cp_loss": 12}
     assert graph["book_moves"] == ["d4"]
     assert graph["your_games_here"] == {"games": 11, "wins": 6, "draws": 0, "losses": 0}
-    assert graph["nearby_mistakes"][0]["average_cp_loss"] == 140
+    lines = block(prompt, LINES_HEADER)
+    assert lines["lines"][0] == {"rank": 1, "san": ["e4", "e5", "Nf3"], "score": {"type": "cp", "value": 35}, "games": 9, "book": False, "human": True}
+    assert lines["lines"][1]["book"] is True
+    assert prompt.index(PROFILE_HEADER) < prompt.index(GRAPH_CONTEXT_HEADER) < prompt.index(LINES_HEADER)
     assert prompt.endswith("What should I play?")
+    assert OWNER.casefold() not in prompt.casefold()
 
 
 def test_graph_context_is_skipped_when_neo4j_is_down(monkeypatch) -> None:
     calls = script(monkeypatch, [result()])
     events = collect(ClaudeProvider(), request(), make_ctx(neo4j_fail=True))
-    assert events[2] == {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": False}
+    assert events[4] == {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": False}
     assert GRAPH_CONTEXT_HEADER not in calls[0]["prompt"]
+    # The lines still come, with no human tag from the graph.
+    lines = next(e for e in events if e["type"] == "lines")
+    assert not any(line["human"] for line in lines["lines"])
 
 
-def test_a_played_move_explanation_skips_the_graph(monkeypatch) -> None:
+def test_lines_are_skipped_when_stockfish_fails(monkeypatch) -> None:
+    calls = script(monkeypatch, [result()])
+    ctx = make_ctx()
+    ctx.stockfish().fail = True
+    events = collect(ClaudeProvider(), request(), ctx)
+    assert events[6] == {"type": "tool_end", "tool": "analyze_position", "source": "stockfish", "ok": False}
+    assert not [e for e in events if e["type"] == "lines"]
+    assert LINES_HEADER not in calls[0]["prompt"]
+
+
+def test_the_profile_is_read_once_per_ten_minutes(monkeypatch) -> None:
+    script(monkeypatch, [result()])
+    ctx = make_ctx()
+    reads = []
+    real = ctx.postgres().get_coaching_brief
+    monkeypatch.setattr(ctx.postgres(), "get_coaching_brief", lambda player: reads.append(player) or real(player))
+    provider = ClaudeProvider()
+    collect(provider, request(), ctx)
+    collect(provider, request(), ctx)
+    assert len(reads) == 1
+    monkeypatch.setattr(providers.time, "monotonic", lambda: 10_000_000.0)
+    collect(provider, request(), ctx)
+    assert len(reads) == 2
+
+
+def test_a_played_move_explanation_skips_the_evidence(monkeypatch) -> None:
     calls = script(monkeypatch, [result()])
     played = {"san": "Nf6", "color": "black", "eval_text": "+0.20"}
     events = collect(ClaudeProvider(), request(played=played), make_ctx())
-    assert not [e for e in events if e["type"] == "tool_start"]
-    assert GRAPH_CONTEXT_HEADER not in calls[0]["prompt"]
+    assert not [e for e in events if e["type"] in ("tool_start", "lines")]
+    assert PROFILE_HEADER not in calls[0]["prompt"] and GRAPH_CONTEXT_HEADER not in calls[0]["prompt"]
 
 
 def test_graph_context_is_redacted_and_bounded() -> None:
@@ -378,7 +450,7 @@ def test_graph_context_is_redacted_and_bounded() -> None:
     graph = ctx.neo4j()
     graph.opening = f"{OWNER} Gambit"
     graph.nearby = 200
-    text = graph_context(START, ctx)
+    text = graph_context(read_style_context(START, ctx), ctx)
     assert text is not None
     assert len(text) <= GRAPH_CONTEXT_CHARS
     assert OWNER.casefold() not in text.casefold()
@@ -386,6 +458,36 @@ def test_graph_context_is_redacted_and_bounded() -> None:
     assert data["opening"] == "you Gambit"
     assert 0 < len(data["nearby_mistakes"]) < 200  # trimmed from the end
     assert data["your_moves"]  # never trimmed
+    assert graph_context(None, ctx) is None
+
+
+def _analysis(*first_moves: str) -> dict[str, Any]:
+    return {
+        "root_player": "black",
+        "limit": {"value": 12},
+        "lines": [{"score": {"type": "cp", "value": 10 - i}, "pv": {"uci": [m, "a2a3"], "san": [m, "a3"]}} for i, m in enumerate(first_moves)],
+    }
+
+
+def test_rank_lines_tags_the_most_played_then_book_then_none() -> None:
+    analysis = _analysis("e7e5", "c7c5", "e7e6")
+    played = rank_lines(analysis, {"c7c5": 40, "e7e6": 3}, {"e7e5"})
+    assert [line["human"] for line in played["lines"]] == [False, True, False]
+    assert played["depth"] == 12 and played["root_player"] == "black"
+    booked = rank_lines(analysis, {}, {"e7e6", "c7c5"})
+    assert [line["human"] for line in booked["lines"]] == [False, True, False]  # best-ranked book line
+    assert not any(line["human"] for line in rank_lines(analysis, {}, set())["lines"])
+    assert rank_lines({"lines": []}, {}, set()) is None
+
+
+def test_style_profile_is_none_when_postgres_fails(monkeypatch) -> None:
+    ctx = make_ctx()
+
+    def down(player: str):
+        raise ConnectionError("pg down")
+
+    monkeypatch.setattr(ctx.postgres(), "get_coaching_brief", down)
+    assert style_profile(ctx) is None
 
 
 # --------------------------------------------------------------------------- offline
@@ -394,15 +496,18 @@ def test_graph_context_is_redacted_and_bounded() -> None:
 def test_offline_position_answer_uses_engine_and_graph() -> None:
     events = list(OfflineProvider().run(request(), make_ctx()))
     tools = [e["tool"] for e in events if e["type"] == "tool_start"]
-    assert tools == ["analyze_position", "get_position_moves", "get_position_moves"]
+    assert tools == ["get_position_moves", "get_position_moves", "analyze_position"]
+    lines = next(e for e in events if e["type"] == "lines")
+    assert [line["human"] for line in lines["lines"]] == [True, False, False]
     text = "".join(e["text"] for e in events if e["type"] == "text")
-    assert "EVAL: +0.35 for White (side to move), Stockfish depth 6." in text
-    assert "MOVE: e4" in text
+    assert "Position: +0.35 for White (side to move), Stockfish depth 6." in text
+    assert "1. e4 e5 Nf3 (+0.35 for White (side to move)) · human (9 of your games)" in text
+    assert "2. d4 d5 c4 (+0.30 for White (side to move))" in text
     # Only the owner's moves count as "your games"; the opponent's 30 games of Nf3 do not.
     assert "you moved from here in 11 games; most often e4 (9 games, 5W 2D 2L, average loss 12 cp)" in text
     assert "Theory here: d4." in text
     assert "Offline evidence mode" in text
-    assert text.rstrip().endswith("PLAY: e2e4 e7e5 g1f3")
+    assert "PLAY:" not in text  # the board draws the lines event
     assert events[0] == {"type": "start", "mode": "offline", "model": None}
     assert events[-1]["type"] == "done"
 
@@ -410,8 +515,8 @@ def test_offline_position_answer_uses_engine_and_graph() -> None:
 def test_offline_says_graph_evidence_is_missing_when_neo4j_is_down() -> None:
     events = list(OfflineProvider().run(request(), make_ctx(neo4j_fail=True)))
     text = "".join(e["text"] for e in events if e["type"] == "text")
-    assert "Graph evidence is missing" in text
-    assert "MOVE: e4" in text
+    assert "graph evidence is missing" in text
+    assert "1. e4 e5 Nf3" in text
 
 
 def test_offline_training_question_reads_the_coaching_brief() -> None:
@@ -564,7 +669,7 @@ def test_chat_route_streams_an_async_provider(monkeypatch) -> None:
     script(monkeypatch, [delta("MOVE: e4"), result()])
     with _app(ClaudeProvider()) as client:
         events = _sse(client.post("/api/coach/chat", json={"question": "Best move?", "fen": START}))
-    assert [e["type"] for e in events] == ["start", "tool_start", "tool_end", "text", "done"]
+    assert [e["type"] for e in events] == ["start", *["tool_start", "tool_end"] * 3, "lines", "text", "done"]
 
 
 @pytest.mark.parametrize("question", ["what should I train", "my weakness", "Make a training plan for me", "my mistakes"])

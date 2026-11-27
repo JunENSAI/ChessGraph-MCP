@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, Protocol
 
@@ -35,8 +36,21 @@ from claude_agent_sdk import (
     query,
 )
 
-from .prompt import SYSTEM_PROMPT, CoachRequest, prompt_text
-from .tools import TOOLS, TOOLS_BY_NAME, ToolContext, ToolOutcome, graph_context, run_tool, tool_definitions
+from .prompt import SYSTEM_PROMPT, CoachRequest, Evidence, prompt_text
+from .tools import (
+    TOOLS,
+    TOOLS_BY_NAME,
+    ToolContext,
+    ToolOutcome,
+    candidate_lines,
+    graph_context,
+    lines_text,
+    rank_lines,
+    read_style_context,
+    run_tool,
+    style_profile,
+    tool_definitions,
+)
 
 Event = dict[str, Any]
 
@@ -68,6 +82,7 @@ TOOL_SERVER = "coach"
 TOOL_PREFIX = f"mcp__{TOOL_SERVER}__"
 LOGIN_HINT = "Claude Code is not logged in. Run `claude` once and use /login, then ask again."
 MAX_TURNS_NOTE = "\n\nI stopped after the maximum number of tool rounds."
+PROFILE_TTL_SECONDS = 600
 _END = object()
 
 
@@ -114,6 +129,39 @@ class ClaudeProvider:
         self.model = model
         self.effort = effort
         self.max_turns = max_turns
+        self._profile_cache: tuple[str, float, str] | None = None  # (player, read at, profile)
+
+    async def _profile(self, ctx: ToolContext) -> str | None:
+        """The player profile, read from PostgreSQL at most once per PROFILE_TTL_SECONDS."""
+        now = time.monotonic()
+        cached = self._profile_cache
+        if cached and cached[0] == ctx.player and now - cached[1] < PROFILE_TTL_SECONDS:
+            return cached[2]
+        profile = await asyncio.to_thread(style_profile, ctx)
+        if profile is not None:
+            self._profile_cache = (ctx.player, now, profile)
+        return profile
+
+    async def gather(self, request: CoachRequest, ctx: ToolContext) -> AsyncIterator[Event | Evidence]:
+        """Retrieve the evidence in the CLAUDE.md order: games, then graph, then Stockfish.
+
+        Yields the tool events and the ``lines`` event for the UI, then the Evidence.
+        """
+        yield {"type": "tool_start", "tool": "get_player_profile", "source": "postgres"}
+        profile = await self._profile(ctx)
+        yield {"type": "tool_end", "tool": "get_player_profile", "source": "postgres", "ok": profile is not None}
+
+        yield {"type": "tool_start", "tool": "get_style_context", "source": "neo4j"}
+        context = await asyncio.to_thread(read_style_context, request.fen, ctx)
+        yield {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": context is not None}
+
+        yield {"type": "tool_start", "tool": "analyze_position", "source": "stockfish"}
+        lines = await asyncio.to_thread(candidate_lines, request.fen, ctx, context)
+        yield {"type": "tool_end", "tool": "analyze_position", "source": "stockfish", "ok": lines is not None}
+        if lines is not None:
+            yield {"type": "lines", **lines}
+
+        yield Evidence(profile=profile, graph=graph_context(context, ctx), lines=lines_text(lines))
 
     def options(self, server: Any) -> ClaudeAgentOptions:
         return ClaudeAgentOptions(
@@ -139,19 +187,21 @@ class ClaudeProvider:
 
         async def pump() -> None:
             try:
-                async for message in query(prompt=prompt_text(request, graph), options=self.options(server)):
+                async for message in query(prompt=prompt_text(request, evidence), options=self.options(server)):
                     queue.put_nowait(message)
             except Exception as exc:  # noqa: BLE001 - mapped to a safe message below
                 queue.put_nowait(exc)
             finally:
                 queue.put_nowait(_END)
 
-        graph = None
+        evidence = Evidence()
         if request.played is None:
-            # Ground the answer in the player's own record before Claude reads the question.
-            queue.put_nowait({"type": "tool_start", "tool": "get_style_context", "source": "neo4j"})
-            graph = await asyncio.to_thread(graph_context, request.fen, ctx)
-            queue.put_nowait({"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": graph is not None})
+            # Ground the answer in the player's games, the graph and the engine before Claude reads it.
+            async for item in self.gather(request, ctx):
+                if isinstance(item, Evidence):
+                    evidence = item
+                else:
+                    yield item
 
         task = asyncio.create_task(pump())
         wrote = False  # text already sent in an earlier message of this answer
@@ -278,50 +328,56 @@ class OfflineProvider:
         return outcome
 
     def _position(self, request: CoachRequest, ctx: ToolContext):
-        analysis = yield from self._call("analyze_position", {"fen": request.fen, "multipv": 1}, ctx)
-        # Two filtered reads: in an opening position the book moves alone can fill a limit.
+        # Graph first, then the engine (CLAUDE.md order). Two filtered reads: in an
+        # opening position the book moves alone can fill a limit.
         graph = yield from self._call("get_position_moves", {"fen": request.fen, "limit": 5, "by": "owner"}, ctx)
         book = yield from self._call("get_position_moves", {"fen": request.fen, "limit": 5, "by": "theory"}, ctx)
-        lines: list[str] = []
-        play: list[str] = []
-        if analysis.ok and analysis.data.get("lines"):
-            best = analysis.data["lines"][0]
-            depth = analysis.data["limit"]["value"]
-            lines.append(f"EVAL: {format_score(best['score'], analysis.data['root_player'])}, Stockfish depth {depth}.")
-            if best.get("move_san"):
-                lines.append(f"MOVE: {best['move_san']}")
-            pv = best["pv"]["san"][:6]
-            if len(pv) > 1:
-                lines.append("Line: " + " ".join(pv) + ".")
-            play = best["pv"]["uci"][:6]
-        else:
-            lines.append(f"Stockfish evidence is missing: {analysis.content}")
+        analysis = yield from self._call("analyze_position", {"fen": request.fen, "multipv": 3}, ctx)
 
-        if graph.ok:
-            yours = sorted(
-                (m for m in graph.data.get("moves", []) if m.get("by") == "owner"),
-                key=lambda m: m.get("games") or 0,
-                reverse=True,
+        yours = sorted(
+            (m for m in (graph.data.get("moves", []) if graph.ok else []) if m.get("by") == "owner"),
+            key=lambda m: m.get("games") or 0,
+            reverse=True,
+        )
+        theory = book.data.get("moves", []) if book.ok else []
+        ranked = None
+        if analysis.ok:
+            ranked = rank_lines(
+                analysis.data,
+                {m["uci_move"]: m.get("games") or 0 for m in yours},
+                {m["uci_move"] for m in theory},
             )
-            if yours:
-                top = yours[0]
-                loss = f", average loss {top['avg_cp_loss']} cp" if top.get("avg_cp_loss") is not None else ""
-                lines.append(
-                    f"Your games: you moved from here in {sum(m.get('games') or 0 for m in yours)} games; "
-                    f"most often {top.get('san_move') or top['uci_move']} ({top.get('games')} games, {_record(top)}{loss})."
-                )
-            else:
-                lines.append("Your games: you never had the move in this position in your stored games.")
-            theory = [m.get("san_move") or m["uci_move"] for m in (book.data.get("moves", []) if book.ok else [])]
-            if theory:
-                lines.append("Theory here: " + ", ".join(theory) + ".")
-        else:
-            lines.append("Graph evidence is missing (Neo4j did not answer).")
+        if ranked is not None:
+            yield {"type": "lines", **ranked}
 
-        lines += ["", OFFLINE_NOTE]
-        if play:
-            lines.append("PLAY: " + " ".join(play))
-        return "\n".join(lines)
+        text: list[str] = []
+        if ranked is not None:
+            root = ranked["root_player"]
+            first = ranked["lines"][0]
+            text.append(f"Position: {format_score(first['score'], root)}, Stockfish depth {ranked['depth']}.")
+            text.append("Lines:")
+            for line in ranked["lines"]:
+                tag = ""
+                if line["human"]:
+                    tag = f" · human ({line['games']} of your games)" if line["games"] else " · human (book)"
+                text.append(f"{line['rank']}. {' '.join(line['san'][:3])} ({format_score(line['score'], root)}){tag}")
+        else:
+            text.append(f"Position: Stockfish evidence is missing: {analysis.content}")
+
+        if not graph.ok:
+            text.append("For you: graph evidence is missing (Neo4j did not answer).")
+        elif yours:
+            top = yours[0]
+            loss = f", average loss {top['avg_cp_loss']} cp" if top.get("avg_cp_loss") is not None else ""
+            text.append(
+                f"For you: you moved from here in {sum(m.get('games') or 0 for m in yours)} games; "
+                f"most often {top.get('san_move') or top['uci_move']} ({top.get('games')} games, {_record(top)}{loss})."
+            )
+        else:
+            text.append("For you: you never had the move in this position in your stored games.")
+        if theory:
+            text.append("Theory here: " + ", ".join(m.get("san_move") or m["uci_move"] for m in theory) + ".")
+        return "\n".join([*text, "", OFFLINE_NOTE])
 
     def _course(self, ctx: ToolContext):
         brief = yield from self._call("get_coaching_brief", {}, ctx)

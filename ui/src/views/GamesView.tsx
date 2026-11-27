@@ -47,7 +47,8 @@ import { replaySan, resultText, tryUci, type ReplayedPly } from '../lib/chess'
 import { whiteEvalFromStored } from '../lib/eval'
 import { glyphFor } from '../lib/notation'
 import { isMuted, playSound, setMuted, soundFor } from '../lib/sound'
-import { createMessage, loadThread } from '../services/coach'
+import { createMessage, loadThread, type CandidateLines } from '../services/coach'
+import { firstMoveArrows } from '../lib/lines'
 import { analyzeFen } from '../services/engine'
 
 const START_FEN = new Chess().fen()
@@ -129,6 +130,9 @@ export function GamesView({ active }: { active: boolean }) {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [ply, setPly] = useState(0)
   const [line, setLine] = useState<{ startFen: string; moves: ReplayedPly[]; index: number } | null>(null)
+  // The coach's candidate lines for the last answer, and the one being replayed.
+  const [coachLines, setCoachLines] = useState<{ messageId: string; lines: CandidateLines } | null>(null)
+  const [activeLine, setActiveLine] = useState<{ messageId: string; rank: number } | null>(null)
   const lineToken = useRef(0)
   const [showAlternative, setShowAlternative] = useState(true)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
@@ -250,6 +254,7 @@ export function GamesView({ active }: { active: boolean }) {
     arrows.push({ startSquare: plies[ply].from, endSquare: plies[ply].to, color: ARROW.played })
     arrows.push({ startSquare: bestMove.from, endSquare: bestMove.to, color: ARROW.best })
   }
+  if (!line && coachLines && coachLines.lines.fen === fen) arrows.push(...firstMoveArrows(coachLines.lines))
   if (explorerArrow) arrows.push({ startSquare: explorerArrow.slice(0, 2), endSquare: explorerArrow.slice(2, 4), color: ARROW.preview })
 
   // Navigation works on whatever is shown: the game, or the better line.
@@ -580,15 +585,31 @@ export function GamesView({ active }: { active: boolean }) {
       trace={coach.trace}
       mode={coach.mode}
       prompts={['Why was this a mistake?', 'Why did I lose?', 'What should I play here?']}
+      activeLine={line ? activeLine : null}
+      onLine={(message, picked) => {
+        if (!message.lines) return
+        setCoachLines({ messageId: message.id, lines: message.lines })
+        setActiveLine({ messageId: message.id, rank: picked.rank })
+        void showLine(message.lines.fen, picked.uci)
+      }}
       onAsk={question => {
         const fromFen = fen
         void coach
-          .ask(question, {
-            mode: 'review',
-            fen: fromFen,
-            summary: game ? `${game.opening}, ${moveLabel}` : 'game',
-            gameId: game?.id,
-          })
+          .ask(
+            question,
+            {
+              mode: 'review',
+              fen: fromFen,
+              summary: game ? `${game.opening}, ${moveLabel}` : 'game',
+              gameId: game?.id,
+            },
+            {
+              onLines: (lines, messageId) => {
+                setCoachLines({ messageId, lines })
+                setActiveLine(null)
+              },
+            },
+          )
           .then(reply => {
             const fix = correction()
             if (wantsBoardLine(question) && fix) {
@@ -596,6 +617,7 @@ export function GamesView({ active }: { active: boolean }) {
               void playContinuation(fix.fen, [fix.uci])
               return
             }
+            if (reply?.lines) return // the chips replay a line on demand
             const seed = reply?.play ?? []
             if (seed.length > 0) void showLine(fromFen, seed)
           })

@@ -54,7 +54,8 @@ import { TIME_CONTROLS } from '../lib/clock'
 import { buildPgn } from '../lib/notation'
 import { isMuted, playSound, setMuted, soundFor } from '../lib/sound'
 import { DEFAULT_STRENGTH, levelForRating, moveTimeMs, STRENGTH_LEVELS, strengthById } from '../lib/strength'
-import { createMessage, loadThread } from '../services/coach'
+import { createMessage, loadThread, type CandidateLines } from '../services/coach'
+import { firstMoveArrows, pathArrows } from '../lib/lines'
 import { analyzeFen, EngineError, playEngineMove } from '../services/engine'
 
 const START_FEN = new Chess().fen()
@@ -124,6 +125,9 @@ export function TrainingView({ active = true }: { active?: boolean }) {
   const [preview, setPreview] = useState<{ fen: string; evaluation: WhiteEval } | null>(null)
   const [lastEngine, setLastEngine] = useState<{ fen: string; san: string; evalText: string | null } | null>(null)
   const [coachLine, setCoachLine] = useState<{ fen: string; moves: string[] } | null>(null)
+  // The coach's candidate lines for one answer, and the one picked to show its whole path.
+  const [coachLines, setCoachLines] = useState<{ messageId: string; lines: CandidateLines } | null>(null)
+  const [activeLine, setActiveLine] = useState<{ messageId: string; rank: number } | null>(null)
   const [explorerArrow, setExplorerArrow] = useState<string | null>(null)
   const [mistakes, setMistakes] = useState(0)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
@@ -419,7 +423,12 @@ export function TrainingView({ active = true }: { active?: boolean }) {
     if (explorerArrow) {
       list.push({ startSquare: explorerArrow.slice(0, 2), endSquare: explorerArrow.slice(2, 4), color: '#77a7ff' })
     }
-    if (coachLine && coachLine.fen === displayFen) {
+    if (coachLines && coachLines.lines.fen === displayFen) {
+      const picked = activeLine?.messageId === coachLines.messageId
+        ? coachLines.lines.lines.find(line => line.rank === activeLine.rank)
+        : undefined
+      list.push(...(picked ? pathArrows(coachLines.lines.fen, picked) : firstMoveArrows(coachLines.lines)))
+    } else if (coachLine && coachLine.fen === displayFen) {
       let position = coachLine.fen
       coachLine.moves.slice(0, 2).forEach((uci, index) => {
         const applied = tryUci(position, uci)
@@ -434,7 +443,7 @@ export function TrainingView({ active = true }: { active?: boolean }) {
     const applied = tryMoveSan(fen, expected.san)
     if (applied) list.push({ startSquare: applied.from, endSquare: applied.to, color: '#bb9af7' })
     return list
-  }, [explorerArrow, coachLine, displayFen, showHint, browsing, engineHint, expected, interactive, fen])
+  }, [explorerArrow, coachLines, activeLine, coachLine, displayFen, showHint, browsing, engineHint, expected, interactive, fen])
 
   const requestEngineHint = async () => {
     if (showHint) {
@@ -987,18 +996,38 @@ export function TrainingView({ active = true }: { active?: boolean }) {
       trace={coach.trace}
       mode={coach.mode}
       prompts={['Why this move?', 'What is the plan?', 'What should I train?']}
+      activeLine={activeLine}
+      onLine={(message, line) => {
+        if (!message.lines) return
+        setCoachLines({ messageId: message.id, lines: message.lines })
+        setActiveLine(current =>
+          current?.messageId === message.id && current.rank === line.rank ? null : { messageId: message.id, rank: line.rank },
+        )
+      }}
       onAsk={question => {
         const fromFen = displayFen
         if (playing && !complete && sideToMove(fen) === userSide && clock.running) clock.pause()
         void coach
-          .ask(question, {
-            mode: 'training',
-            fen: fromFen,
-            summary: session ? `${session.title}, ${progress.toLowerCase()}` : 'lesson',
-            profile: plan ? planSummary(plan) : undefined,
-          })
+          .ask(
+            question,
+            {
+              mode: 'training',
+              fen: fromFen,
+              summary: session ? `${session.title}, ${progress.toLowerCase()}` : 'lesson',
+              profile: plan ? planSummary(plan) : undefined,
+            },
+            {
+              onLines: (lines, messageId) => {
+                setCoachLines({ messageId, lines })
+                setActiveLine(null)
+              },
+            },
+          )
           .then(reply => {
-            if (reply?.play?.length) setCoachLine({ fen: fromFen, moves: reply.play })
+            if (!reply?.lines && reply?.play?.length) {
+              setCoachLines(null)
+              setCoachLine({ fen: fromFen, moves: reply.play })
+            }
           })
       }}
     />

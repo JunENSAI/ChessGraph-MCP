@@ -62,8 +62,11 @@ process that dies answers 503.
 - **`providers.py`** has two providers:
   - `ClaudeProvider` runs Claude through the Claude Agent SDK, on the local
     Claude Code login, with no API key.
-    - First it fetches the graph context, reported as `get_style_context` on
-      the `neo4j` source.
+    - First it fetches the evidence in the CLAUDE.md order: the player profile
+      (`get_player_profile`, postgres, cached for 10 minutes), the graph context
+      (`get_style_context`, neo4j) and the 3 candidate lines
+      (`analyze_position` with MultiPV 3, stockfish). The lines go to the UI as a
+      `lines` event and all three go into the prompt.
     - Then it runs one `query()` with the coach system prompt and these
       options: `tools=[]`, `setting_sources=[]`, `strict_mcp_config=True`, and
       the fourteen tools as an in-process MCP server (`mcp__coach__*`).
@@ -87,6 +90,7 @@ It answers with `text/event-stream`. Each `data:` line is one JSON event:
 | `start` | `mode`, `model` |
 | `tool_start` | `tool`, `source` |
 | `tool_end` | `tool`, `source`, `ok` |
+| `lines` | `root_player`, `depth`, `lines`: Stockfish's top 3 from the position, each with `rank`, `uci`, `san`, `score` (side to move), `games`, `book`, `human` |
 | `text` | `text` (append) |
 | `done` | `mode`, `stop_reason` |
 | `error` | `message` |

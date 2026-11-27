@@ -369,19 +369,140 @@ def style_summary(context: Any) -> dict[str, Any]:
     return summary
 
 
-def graph_context(fen: str, ctx: ToolContext) -> str | None:
-    """Compact, redacted JSON of the owner's record around ``fen``, or None when Neo4j fails.
+def read_style_context(fen: str, ctx: ToolContext) -> Any | None:
+    """The owner's record around ``fen`` from the graph, or None when Neo4j fails."""
+    try:
+        return ctx.neo4j().get_style_context(fen)
+    except Exception:  # noqa: BLE001 - missing graph evidence, not a failed answer
+        return None
+
+
+def graph_context(context: Any | None, ctx: ToolContext) -> str | None:
+    """Compact, redacted JSON of a style context, or None without one.
 
     At most GRAPH_CONTEXT_CHARS: nearby mistakes, then recent games, then
     opponent moves are dropped from the end until it fits.
     """
-    try:
-        summary = redact(style_summary(ctx.neo4j().get_style_context(fen)), ctx.player)
-    except Exception:  # noqa: BLE001 - missing graph evidence, not a failed answer
+    if context is None:
         return None
+    summary = redact(style_summary(context), ctx.player)
     text = json.dumps(summary, separators=(",", ":"), default=str)
     for key in ("nearby_mistakes", "recent_games", "opponent_moves"):
         while len(text) > GRAPH_CONTEXT_CHARS and summary[key]:
             summary[key].pop()
             text = json.dumps(summary, separators=(",", ":"), default=str)
     return text if len(text) <= GRAPH_CONTEXT_CHARS else None
+
+
+# --------------------------------------------------------------------------- candidate lines
+
+CANDIDATE_LINES = 3
+LINE_PLIES = 6
+
+
+def rank_lines(analysis: dict[str, Any], games: dict[str, int], book: set[str]) -> dict[str, Any] | None:
+    """Stockfish's lines in rank order, each tagged with how people play its first move.
+
+    ``games`` counts stored games per first move (yours and your opponents'),
+    ``book`` holds the book moves. The ``human`` line is the most played one;
+    with no games, the best-ranked book line; with neither, no line.
+    """
+    lines = []
+    for index, line in enumerate(analysis.get("lines") or [], start=1):
+        uci = (line.get("pv") or {}).get("uci") or []
+        if not uci:
+            continue
+        lines.append(
+            {
+                "rank": index,
+                "uci": uci[:LINE_PLIES],
+                "san": ((line.get("pv") or {}).get("san") or [])[:LINE_PLIES],
+                "score": line.get("score"),
+                "games": games.get(uci[0], 0),
+                "book": uci[0] in book,
+                "human": False,
+            }
+        )
+    if not lines:
+        return None
+    played = [line for line in lines if line["games"] > 0]
+    booked = [line for line in lines if line["book"]]
+    if played:
+        max(played, key=lambda line: line["games"])["human"] = True
+    elif booked:
+        booked[0]["human"] = True
+    return {
+        "root_player": analysis.get("root_player"),
+        "depth": (analysis.get("limit") or {}).get("value"),
+        "lines": lines,
+    }
+
+
+def candidate_lines(fen: str, ctx: ToolContext, context: Any | None) -> dict[str, Any] | None:
+    """Stockfish's top 3 lines from ``fen``, tagged from the style context; None if Stockfish fails."""
+    try:
+        analysis = _dump(
+            ctx.stockfish().analyze_position(fen, limit_type="depth", limit_value=None, multipv=CANDIDATE_LINES)
+        )
+    except Exception:  # noqa: BLE001 - missing engine evidence, not a failed answer
+        return None
+    games: dict[str, int] = {}
+    book: set[str] = set()
+    if context is not None:
+        for move in [*context.owner_moves, *context.opponent_moves]:
+            games[move.uci_move] = games.get(move.uci_move, 0) + (move.games or 0)
+        book = {move.uci_move for move in context.theory_moves}
+    return rank_lines(analysis, games, book)
+
+
+def lines_text(lines: dict[str, Any] | None) -> str | None:
+    """The candidate lines as compact JSON for the prompt (SAN only), or None."""
+    if not lines:
+        return None
+    block = {
+        "side_to_move": lines.get("root_player"),
+        "depth": lines.get("depth"),
+        "lines": [
+            {key: line[key] for key in ("rank", "san", "score", "games", "book", "human")}
+            for line in lines["lines"]
+        ],
+    }
+    return json.dumps(block, separators=(",", ":"), default=str)
+
+# --------------------------------------------------------------------------- player profile
+
+
+def style_profile(ctx: ToolContext) -> str | None:
+    """The player's record, best and weakest opening families, and top repeated mistake.
+
+    Compact, redacted JSON, or None when PostgreSQL fails.
+    """
+    try:
+        summary = _dump(ctx.postgres().get_player_summary(ctx.player))
+        brief = _dump(ctx.postgres().get_coaching_brief(ctx.player))
+    except Exception:  # noqa: BLE001 - missing evidence, not a failed answer
+        return None
+
+    def record(row: dict[str, Any]) -> dict[str, Any]:
+        return {key: row.get(key) for key in ("family", "games", "wins", "draws", "losses") if row.get(key) is not None}
+
+    profile: dict[str, Any] = {
+        "record": {
+            key: summary.get(key)
+            for key in ("games_played", "wins", "draws", "losses", "average_rating")
+            if summary.get(key) is not None
+        },
+        "strongest_openings": [record(row) for row in (brief.get("strengths") or [])[:3]],
+    }
+    target = brief.get("target")
+    if target:
+        profile["weakest_opening"] = record(target)
+        splits = target.get("splits") or []
+        if splits:
+            split = splits[0]
+            profile["repeated_mistake"] = {
+                key: split.get(key)
+                for key in ("ply", "played_san", "best_san", "times", "average_cp_loss")
+                if split.get(key) is not None
+            }
+    return json.dumps(redact(profile, ctx.player), separators=(",", ":"), default=str)

@@ -35,9 +35,16 @@ The player is Junior, a data scientist who works directly in code.
 - **Style.** Junior prefers positional chess: pawn structure, weak squares,
   piece activity, space, outposts, and prophylaxis rather than speculative
   tactics.
-- **Answers.** Junior wants concise, concrete coaching: the evaluation, the
-  single move that follows, and a short reason. State what the tools showed and
-  what is still missing.
+- **Answers.** Junior wants concise, concrete coaching. State what the tools
+  showed and what is still missing. For the current position, answer in three
+  short parts:
+  1. **Position:** the Stockfish eval and depth, whether Junior's games know
+     the position (games, W/D/L), and the opening.
+  2. **Lines:** Stockfish's top 3 lines in rank order, drawn on the board. Tag
+     as human the one people play here: most games in Junior's games, else
+     book.
+  3. **For you:** one or two sentences tying the choice to Junior's style, as
+     read from his games before answering.
 
 ## Evidence order
 
@@ -55,7 +62,9 @@ For a coaching answer, gather evidence in this order, then explain it:
    and resulting FEN from the tool.
 
 PostgreSQL and Neo4j reads may run in parallel. Stockfish calls stay serial
-because one UCI process serves that server.
+because one UCI process serves that server. The in-app coach fetches the same
+order before Claude reads the question: the player profile, then the graph
+context, then the 3 candidate lines.
 
 If a tool returns nothing, say the evidence is missing. Do not fill the gap with
 a plausible line.

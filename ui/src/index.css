@@ -323,6 +323,64 @@ p {
   color: var(--text);
 }
 
+/* Coach candidate lines: one chip per Stockfish line, in its board arrow color */
+
+.line-chips {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.line-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-color);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.line-chip:hover,
+.line-chip.active {
+  border-color: var(--line-color);
+  background: color-mix(in srgb, var(--line-color) 12%, var(--surface-2));
+}
+
+.line-rank {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--line-color);
+  color: var(--lime-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.line-moves {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.line-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--lime-soft);
+  color: var(--lime);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 /* Board stage: the board is sized to the viewport height */
 
 .play-layout {

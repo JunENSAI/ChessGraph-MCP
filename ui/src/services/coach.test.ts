@@ -188,6 +188,37 @@ describe('askCoach', () => {
     expect(message.play).toEqual(['e2e4', 'd7d5'])
   })
 
+  it('keeps the candidate lines with the answer and in the cache', async () => {
+    const lines = {
+      root_player: 'white' as const,
+      depth: 18,
+      lines: [
+        { rank: 1, uci: ['e2e4', 'e7e5'], san: ['e4', 'e5'], score: { type: 'cp' as const, value: 35 }, games: 9, book: true, human: true },
+        { rank: 2, uci: ['d2d4'], san: ['d4'], score: { type: 'cp' as const, value: 30 }, games: 0, book: true, human: false },
+      ],
+    }
+    const events: CoachEvent[] = [
+      { type: 'start', mode: 'claude', model: 'claude-opus-5-5' },
+      { type: 'lines', ...lines },
+      { type: 'text', text: 'Position: +0.35, depth 18.' },
+      { type: 'done', mode: 'claude', stop_reason: 'end_turn' },
+    ]
+    const store = memoryStore()
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events.map(frame))))
+    const seen: unknown[] = []
+    const message = await askCoach('Best move?', context, { onLines: next => seen.push(next) }, store)
+
+    const expected = { ...lines, fen: context.fen }
+    expect(seen).toEqual([expected])
+    expect(message.lines).toEqual(expected)
+    expect(message.play).toEqual([])
+
+    vi.stubGlobal('fetch', vi.fn())
+    const cached = await askCoach('Best move?', context, {}, store)
+    expect(cached.cached).toBe(true)
+    expect(cached.lines).toEqual(expected)
+  })
+
   it('reads an older cached answer that has no mode', async () => {
     const store = memoryStore()
     rememberAnswer(context.mode, context.fen, 'q', 'MOVE: Nf3\nPLAY: g1f3', 'claude', store)

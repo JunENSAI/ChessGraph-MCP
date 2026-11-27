@@ -858,3 +858,95 @@ A code review of the pull request found these. All are in
 New and changed tests in `tests/test_coach.py`: the session options blank the
 key, the turn cap ends with the notice before `done`, and text from two
 messages is joined with a blank line.
+
+## Batch 9: three-part coach answers with 3 candidate lines
+
+Branch `feat/coach-lines-ui`.
+
+### Why
+
+For the current position, Junior wants a brief answer in three parts:
+
+1. the Stockfish eval, whether the position is known from his games, and the
+   opening;
+2. three possible lines shown on the board, ranked by Stockfish, with the one
+   people actually play marked;
+3. advice framed by his own games, read before the coach answers.
+
+### Changed
+
+- **Evidence is fetched before Claude reads the question, in the CLAUDE.md
+  order.** The order is the player profile, then the graph context, then the
+  lines (`ClaudeProvider.gather`). Each step lights its own chip.
+  - **Player profile** (`style_profile`, PostgreSQL): record, strongest and
+    weakest opening families, and the top repeated mistake. It is redacted and
+    cached for 10 minutes per player.
+  - **Graph context** (Neo4j): as in batch 7. `read_style_context` now reads it
+    once, and the same result feeds the lines.
+  - **Candidate lines** (`candidate_lines`, Stockfish): one MultiPV 3 search.
+    - `rank_lines` tags each line with `games`: how often its first move was
+      played here in your games and your opponents' games.
+    - It also tags each line with `book`.
+    - `human` marks the most played line; with no games, the best-ranked book
+      line; otherwise no line.
+- **A new SSE event, `lines`**, carries `root_player`, `depth` and the 3 lines
+  (`rank`, `uci`, `san`, `score`, `games`, `book`, `human`). It is sent before
+  any text, so the board shows the lines while the answer streams.
+- **The prompt carries three blocks**: Player profile, Graph context and
+  Candidate lines, each as compact JSON. The answer shape for a position
+  question is now:
+  - **Position:** eval and depth, known (games, W/D/L) or new, and the opening.
+  - **Lines:** the 3 lines, with the human one marked.
+  - **For you:** one or two sentences.
+
+  There is no `PLAY:` line for position questions. Game and training answers
+  keep it.
+- **Offline mode** reads the graph first, then runs a MultiPV 3 search. It sends
+  the same `lines` event and writes the same three parts.
+- **UI:**
+  - **Coach answers:** the coach service parses `lines`, and `useCoach` passes
+    them on while the answer streams. Answers are cached with their lines.
+  - **Line chips:** `CoachPanel` shows a chip per line (rank, SAN, eval from
+    White, and a "human" tag explained in its tooltip).
+  - **Board:** Play & train draws the 3 first moves in rank colours (lime,
+    blue, amber). A chip click draws that line's whole path, fading move by
+    move. In game review, a chip replays the line on the board.
+  - **Shared helpers:** in `ui/src/lib/lines.ts`.
+- **Docs:**
+  - `CLAUDE.md`: the Answers rule and the in-app evidence order.
+  - `plugins/chessgraph/agents/chess-coach.md`: the answer shape.
+  - The `explain-position` skill: games and graph first, then MultiPV 3, then
+    three parts.
+  - `backend/README.md`: the `lines` event.
+  - `README.md`: the coach section.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 186 passed, 7 skipped |
+| `cd ui && npm test` | 99 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npx tsc -b` | no errors |
+| `claude plugin validate plugins/chessgraph` | passed |
+| `curl -N POST /api/coach/chat` after 1.d4 (live stores, your login) | profile (postgres) → style context (neo4j) → analyze (stockfish) → `lines` → text → `done` in 8.2 s. The lines were 1...d5 (−8, book, 1,166 games, human), 1...Nf6 (−10, book, 338 games) and 1...f5 (−52, book). The answer came in the three parts |
+| Account-name scan of that stream | no match |
+
+In the browser (1440×900, Play & train, Coach tab), "What should I play here?"
+showed three arrows (e4 lime, Nf3 blue, d4 amber) and three chips, with d4
+tagged human. Clicking chip 3 drew the d4 c5 c4 path.
+
+New tests:
+
+- `tests/test_coach.py`:
+  - the fetch order and the `lines` event;
+  - the three prompt blocks, in order, with no account name;
+  - human tagging by games, then book, then none;
+  - lines skipped when Stockfish fails, and no human tag when Neo4j is down;
+  - the 10-minute profile cache;
+  - a played-move explanation skips all three fetches;
+  - a profile is `None` when PostgreSQL fails;
+  - offline writes the three parts and sends `lines`.
+- `ui/src/lib/lines.test.ts`: colours, first-move arrows, a fading path that
+  stops at an illegal move, eval labels including mate, and the human reason.
+- `ui/src/services/coach.test.ts`: `lines` is streamed, attached and cached.
