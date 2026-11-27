@@ -17,6 +17,7 @@ from .models import (
     PositionContext,
     PositionMoves,
     RecurringBlunders,
+    StyleContext,
     TheoryExits,
     TranspositionResult,
 )
@@ -180,6 +181,71 @@ ORDER BY games DESC, ply, played_uci
 """
 
 
+def _moves_subquery(alias: str, where: str, order: str) -> str:
+    """Moves leaving ``p`` that match ``where``, as PositionMove maps, first ``$limit`` by ``order``."""
+    return f"""
+CALL (p) {{
+  OPTIONAL MATCH (p)-[r:PLAYED_MOVE|THEORY_MOVE]->(target:Position)
+  WHERE {where}
+  WITH r, target ORDER BY {order} LIMIT $limit
+  RETURN [item IN collect(CASE WHEN r IS NULL THEN null ELSE {{
+      relationship: type(r), move: r {{{MOVE_FIELDS}}}, target: {_position("target")}
+  }} END) WHERE item IS NOT NULL] AS {alias}
+}}"""
+
+
+def style_context_cypher(depth: int) -> str:
+    """One read for the owner's record around a position.
+
+    ``depth`` is spliced into the variable-length pattern (Cypher takes no
+    parameter there), so it must already be a validated integer 1..4.
+    """
+    if depth not in range(1, MAX_PATH_DEPTH + 1):
+        raise ValueError("depth must be an integer from 1 through 4")
+    return f"""
+MATCH (p:Position {{fen_norm: $fen_norm}})
+OPTIONAL MATCH (p)-[:CLASSIFIED_AS]->(exact:Opening)
+OPTIONAL MATCH (p)-[:IN_OPENING]->(line:Opening)
+WITH p, head(collect(DISTINCT exact.opening_name)) AS opening, collect(DISTINCT line.family)[0..3] AS opening_families
+{_moves_subquery("owner_moves", "type(r) = 'PLAYED_MOVE' AND r.by = 'owner'", "r.games DESC, r.uci_move")}
+{_moves_subquery("opponent_moves", "type(r) = 'PLAYED_MOVE' AND r.by = 'opponent'", "r.games DESC, r.uci_move")}
+{_moves_subquery("theory_moves", "type(r) = 'THEORY_MOVE'", "size(coalesce(r.eco_codes, [])) DESC, r.uci_move")}
+CALL (p) {{
+  OPTIONAL MATCH (p)<-[reach:REACHED]-(game:Game)
+  // A game can reach one position twice (repetition): keep its first visit.
+  WITH game, min(reach.ply) AS ply, head(collect(reach.owner_to_move)) AS owner_to_move
+  ORDER BY game.played_date DESC, game.game_id DESC
+  WITH [visit IN collect(CASE WHEN game IS NULL THEN null ELSE
+          {{game: {_game("game")}, ply: ply, owner_to_move: owner_to_move}} END)
+        WHERE visit IS NOT NULL] AS visits
+  RETURN size(visits) AS total_games,
+         size([v IN visits WHERE v.game.user_outcome = 'win']) AS owner_wins,
+         size([v IN visits WHERE v.game.user_outcome = 'draw']) AS owner_draws,
+         size([v IN visits WHERE v.game.user_outcome = 'loss']) AS owner_losses,
+         visits[0..$limit] AS recent_games
+}}
+CALL (p) {{
+  OPTIONAL MATCH path = (p)-[:PLAYED_MOVE*0..{depth}]->(near:Position)
+  WITH near, min(length(path)) AS distance
+  MATCH (near)-[m:MISTAKE_IN]->(game:Game)
+  WITH near, distance,
+       count(DISTINCT game) AS games,
+       avg(m.cp_loss) AS average_cp_loss,
+       max(m.cp_loss) AS max_cp_loss,
+       collect(DISTINCT m.played_san)[0..3] AS played_moves,
+       collect(DISTINCT m.best_uci)[0..3] AS best_moves
+  ORDER BY games DESC, distance, average_cp_loss DESC
+  LIMIT $limit
+  RETURN collect({{position: {_position("near")}, distance: distance, games: games,
+                  average_cp_loss: average_cp_loss, max_cp_loss: max_cp_loss,
+                  played_moves: played_moves, best_moves: best_moves}}) AS nearby_mistakes
+}}
+RETURN {_position("p")} AS position, opening, opening_families,
+       owner_moves, opponent_moves, theory_moves,
+       total_games, owner_wins, owner_draws, owner_losses, recent_games, nearby_mistakes
+"""
+
+
 def _record_data(record: Any) -> dict[str, Any]:
     if hasattr(record, "data"):
         return dict(record.data())
@@ -325,3 +391,24 @@ LIMIT $limit
         bounded_limit = clamp_limit(limit, self.max_results)
         rows = self._read(THEORY_EXITS_CYPHER, {"limit": bounded_limit, "by": by})
         return TheoryExits.model_validate({"by": by, "exits": rows})
+
+    def get_style_context(self, fen: str, depth: int = 2, limit: int = 5) -> StyleContext:
+        """The owner's record around a position: moves by mover and book, results, nearby mistakes.
+
+        A position missing from the graph gives an empty context, not an error.
+        """
+        fen_norm = normalize_fen(fen)
+        if depth < 1:
+            raise ValueError("depth must be at least 1")
+        bounded_depth = min(depth, self.max_path_depth)
+        bounded_limit = clamp_limit(limit, self.max_results)
+        rows = self._read(style_context_cypher(bounded_depth), {"fen_norm": fen_norm, "limit": bounded_limit})
+        base = {"fen_norm": fen_norm, "depth": bounded_depth}
+        if not rows:
+            return StyleContext.model_validate(base)
+        row = rows[0]
+        flat = {
+            key: [{"relationship": item["relationship"], **item["move"], "target": item["target"]} for item in row[key]]
+            for key in ("owner_moves", "opponent_moves", "theory_moves")
+        }
+        return StyleContext.model_validate({**base, **row, **flat})

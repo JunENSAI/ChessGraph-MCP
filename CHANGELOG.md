@@ -712,3 +712,85 @@ without stderr, `prompt_text`, the mode settings, and the async SSE route.
 ### Not done
 
 - The README still describes the API key. That is batch 8.
+
+## Batch 7: graph context for the coach (GraphRAG), and graph invariants
+
+### Why
+
+- **The graph is reliable.** A read-only audit compared Neo4j with
+  PostgreSQL. Every check agreed:
+  - 4,595 games;
+  - REACHED = 388,522 moves + 4,595 starts;
+  - PLAYED_MOVE `times` summed by mover = 194,423 owner and 194,099 opponent
+    moves, the same as PostgreSQL;
+  - wins + draws + losses = games on every edge;
+  - MISTAKE_IN = 22,262 inaccuracies, 19,301 mistakes and 7,695 blunders, the
+    same as PostgreSQL;
+  - no stale edge, no orphan position, and exactly one owner Player.
+- **Two gaps are known and by design.**
+  - MISTAKE_IN is stored per ply: 49,258 edges for 49,147 distinct game and
+    position pairs, because repetitions are not collapsed.
+  - No ENTERED_ENDGAME position links to an Endgame Atlas pattern. The Atlas
+    only covers 6 pieces or fewer, and the first endgame position always has
+    more.
+- **So the graph is grounded evidence of the player's style.** It records
+  which moves you choose, how you score with them, and where you go wrong,
+  position by position, transpositions included.
+- **Pre-fetching it is cheaper.** Through Claude Code, every tool round is a
+  full Opus turn. Before this batch, a position question spent 2 to 4 rounds
+  on graph tools. "Mistakes near this position" was not reachable from the
+  in-app coach at all.
+- **It is retrieval by key, with no embeddings.** It is a lookup by
+  `fen_norm` plus a bounded walk, so no vector search is needed.
+
+### Changed
+
+- `chess_mcp/neo4j/repository.py`: `get_style_context(fen, depth=2, limit=5)`,
+  a single read transaction. It returns:
+  - your moves, opponents' moves and book moves from the position;
+  - the exact opening and its families;
+  - your record from the position, with your latest games through it;
+  - the positions within `depth` plies along played moves where you made
+    stored mistakes, ranked by the number of games.
+
+  `depth` is clamped to `NEO4J_MAX_PATH_DEPTH` (at most 4) and checked against
+  the 1..4 whitelist before it is spliced into the query. `limit` goes through
+  `clamp_limit`. A position missing from the graph returns an empty context.
+- `chess_mcp/neo4j/models.py`: `StyleContext`, `NearbyMistake`.
+- `backend/coach/tools.py`: `graph_context(fen, ctx)` turns the result into
+  compact JSON. Usernames are redacted. The output is capped at 6,000
+  characters by dropping nearby mistakes, then recent games, then opponent
+  moves. It returns `None` when Neo4j fails.
+- `backend/coach/providers.py`: before Claude reads the question,
+  `ClaudeProvider` fetches the graph context, reported as
+  `get_style_context` on the Graph chip, and adds it to the prompt. An
+  explanation of a move just played skips it.
+- `backend/coach/prompt.py`: `user_turn` and `prompt_text` take the block.
+  The system prompt gains one rule: cite the graph context rather than
+  re-reading the same position with tools.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 181 passed, 7 skipped (the opt-in integration tests) |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 7 passed, including the two new tests |
+| `PROFILE` of the nearby-mistakes walk | from the start position, 3,129 db hits at depth 2 and 16,851 at depth 4; after 1.e4 or 1.d4, under 0.05 s |
+| `get_style_context` live | start position: 1.19 s cold, 19,829 characters raw; after 1.d4: 0.07 s; an unknown endgame position: empty |
+| `curl -N POST /api/coach/chat` after 1.d4 | `get_style_context` (neo4j) → `analyze_position` (stockfish) → answer → `done` in 8.4 s. The answer cites your 1...d5 record (480 games) and a nearby repeated mistake (2...Nf6 against 2.c4, 18 games, 54 cp) |
+| Account-name scan of that SSE stream | no match |
+
+New tests:
+
+- `tests/test_neo4j_repository.py` (3): one read session on the configured
+  database with no write keyword, the FEN normalized, depth clamped to
+  `*0..4`, limit clamped to 100, rows flattened into the model; an unknown
+  position gives an empty context; a depth below 1 is refused.
+- `tests/test_coach.py` (4): the context is fetched first and its JSON is in
+  the prompt; it is skipped when Neo4j is down; it is skipped for a played-move
+  explanation; it is redacted and bounded, and trimmed from the end.
+- `tests/test_integration.py` (2):
+  - `test_neo4j_graph_agrees_with_postgres` turns the audit into assertions:
+    game count, REACHED = moves + games, PLAYED_MOVE `times` by mover,
+    W + D + L = games, MISTAKE_IN by severity, one owner.
+  - `get_style_context` from the start position.

@@ -21,6 +21,7 @@ Evidence rules:
 - A stored evaluation (cp_loss, best_move_uci in the games) is historical; a Stockfish call is fresh. Do not mix them up.
 - Endgame type is not stored on games: never claim an endgame weakness from the coaching brief.
 - If a tool fails or returns nothing that the question needed, say that evidence is missing in one clause and stop. Do not fill the gap.
+- The user turn may carry "Graph context": the player's own record from the position graph (your_moves and opponent_moves with games, results, score_pct and average centipawn loss; book moves; recent games; nearby_mistakes within a few plies). It is evidence already retrieved: cite it instead of calling get_position_moves or get_games_through_position for the same position.
 
 Answer shape (the app parses the last line):
 - For a position question: the evaluation, one move in SAN, and at most two sentences on why.
@@ -57,8 +58,11 @@ class CoachRequest(BaseModel):
     history: list[HistoryTurn] = Field(default_factory=list, max_length=12)
 
 
-def user_turn(request: CoachRequest) -> str:
-    """The text of the user turn: board context first, then the question."""
+GRAPH_CONTEXT_HEADER = "Graph context (read-only evidence from my stored games, JSON):"
+
+
+def user_turn(request: CoachRequest, graph: str | None = None) -> str:
+    """The text of the user turn: board context, then graph context, then the question."""
     subject = "training board" if request.view == "training" else "position from one of my games"
     lines = [f"Current position (FEN): {request.fen}", f"Context: {subject}."]
     if request.summary:
@@ -73,11 +77,13 @@ def user_turn(request: CoachRequest) -> str:
             f"Stockfish evaluation before it, from the side to move: {request.played.eval_text}."
         )
         lines.append(EXPLAIN_PLAYED_INSTRUCTION)
+    if graph:
+        lines += [GRAPH_CONTEXT_HEADER, graph]
     lines += ["", request.question.strip()]
     return "\n".join(lines)
 
 
-def prompt_text(request: CoachRequest) -> str:
+def prompt_text(request: CoachRequest, graph: str | None = None) -> str:
     """One prompt for a one-shot Claude Code query: earlier turns as text, then the user turn."""
     earlier = [
         f"{'Me' if turn.role == 'user' else 'Coach'}: {turn.text.strip()}"
@@ -85,5 +91,5 @@ def prompt_text(request: CoachRequest) -> str:
         if turn.text.strip()
     ]
     if not earlier:
-        return user_turn(request)
-    return "Earlier in this conversation:\n" + "\n\n".join(earlier) + "\n\n---\n\n" + user_turn(request)
+        return user_turn(request, graph)
+    return "Earlier in this conversation:\n" + "\n\n".join(earlier) + "\n\n---\n\n" + user_turn(request, graph)

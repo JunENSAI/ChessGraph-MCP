@@ -82,6 +82,78 @@ def test_neo4j_graph_v2_tools_answer_from_the_loaded_graph() -> None:
         repository.close()
 
 
+GRAPH_COUNTS = """
+CALL () { MATCH (g:Game) RETURN count(g) AS games }
+CALL () { MATCH (:Game)-[r:REACHED]->() RETURN count(r) AS reached }
+CALL () { MATCH ()-[r:PLAYED_MOVE {by: 'owner'}]->() RETURN sum(r.times) AS owner_moves }
+CALL () { MATCH ()-[r:PLAYED_MOVE {by: 'opponent'}]->() RETURN sum(r.times) AS opponent_moves }
+CALL () {
+  MATCH ()-[r:PLAYED_MOVE]->() WHERE r.wins + r.draws + r.losses <> r.games OR coalesce(r.games, 0) = 0
+  RETURN count(r) AS bad_results
+}
+CALL () {
+  MATCH ()-[m:MISTAKE_IN]->()
+  RETURN sum(CASE WHEN m.cp_loss < 100 THEN 1 ELSE 0 END) AS inaccuracies,
+         sum(CASE WHEN m.cp_loss >= 100 AND m.cp_loss < 300 THEN 1 ELSE 0 END) AS mistakes,
+         sum(CASE WHEN m.cp_loss >= 300 THEN 1 ELSE 0 END) AS blunders
+}
+CALL () { MATCH (p:Player {is_owner: true}) RETURN count(p) AS owners }
+RETURN games, reached, owner_moves, opponent_moves, bad_results, inaccuracies, mistakes, blunders, owners
+"""
+
+POSTGRES_COUNTS = """
+SELECT (SELECT count(*) FROM games) AS games,
+       count(*) AS moves,
+       count(*) FILTER (WHERE owner) AS owner_moves,
+       count(*) FILTER (WHERE NOT owner) AS opponent_moves,
+       count(*) FILTER (WHERE owner AND cp_loss >= 50 AND cp_loss < 100) AS inaccuracies,
+       count(*) FILTER (WHERE owner AND cp_loss >= 100 AND cp_loss < 300) AS mistakes,
+       count(*) FILTER (WHERE owner AND cp_loss >= 300) AS blunders
+FROM (
+  SELECT m.turn_color::text = left(g.user_color::text, 1) AS owner, m.cp_loss  -- w/b vs white/black
+  FROM game_moves m JOIN games g USING (game_id)
+) AS moves
+"""
+
+
+def test_neo4j_graph_agrees_with_postgres() -> None:
+    """The graph is a faithful projection of the stored games (run after a --reset load)."""
+    from sqlalchemy import create_engine, text
+
+    from chess_mcp.config import postgres_url
+
+    engine = create_engine(postgres_url())
+    repository = Neo4jRepository.from_settings(get_neo4j_settings())
+    try:
+        with engine.connect() as connection:
+            pg = dict(connection.execute(text(POSTGRES_COUNTS)).mappings().one())
+        graph = repository._read(GRAPH_COUNTS, {})[0]
+    finally:
+        repository.close()
+        engine.dispose()
+
+    assert graph["games"] == pg["games"]
+    assert graph["reached"] == pg["moves"] + pg["games"]  # every move plus one start per game
+    assert graph["owner_moves"] == pg["owner_moves"]
+    assert graph["opponent_moves"] == pg["opponent_moves"]
+    assert graph["bad_results"] == 0
+    assert (graph["inaccuracies"], graph["mistakes"], graph["blunders"]) == (
+        pg["inaccuracies"], pg["mistakes"], pg["blunders"],
+    )
+    assert graph["owners"] == 1
+
+
+def test_style_context_reads_the_owner_record_around_the_start() -> None:
+    repository = Neo4jRepository.from_settings(get_neo4j_settings())
+    try:
+        context = repository.get_style_context(chess.STARTING_FEN)
+    finally:
+        repository.close()
+    assert context.owner_moves and all(move.by == "owner" for move in context.owner_moves)
+    assert context.theory_moves and all(move.relationship == "THEORY_MOVE" for move in context.theory_moves)
+    assert context.total_games == context.owner_wins + context.owner_draws + context.owner_losses
+    assert all(item.distance <= context.depth for item in context.nearby_mistakes)
+
 def test_opponent_plays_a_legal_move_at_limited_strength() -> None:
     from backend.opponent import Opponent
 

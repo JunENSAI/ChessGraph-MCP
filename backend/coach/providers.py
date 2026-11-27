@@ -36,7 +36,7 @@ from claude_agent_sdk import (
 )
 
 from .prompt import SYSTEM_PROMPT, CoachRequest, prompt_text
-from .tools import TOOLS, TOOLS_BY_NAME, ToolContext, ToolOutcome, run_tool, tool_definitions
+from .tools import TOOLS, TOOLS_BY_NAME, ToolContext, ToolOutcome, graph_context, run_tool, tool_definitions
 
 Event = dict[str, Any]
 
@@ -135,12 +135,19 @@ class ClaudeProvider:
 
         async def pump() -> None:
             try:
-                async for message in query(prompt=prompt_text(request), options=self.options(server)):
+                async for message in query(prompt=prompt_text(request, graph), options=self.options(server)):
                     queue.put_nowait(message)
             except Exception as exc:  # noqa: BLE001 - mapped to a safe message below
                 queue.put_nowait(exc)
             finally:
                 queue.put_nowait(_END)
+
+        graph = None
+        if request.played is None:
+            # Ground the answer in the player's own record before Claude reads the question.
+            queue.put_nowait({"type": "tool_start", "tool": "get_style_context", "source": "neo4j"})
+            graph = await asyncio.to_thread(graph_context, request.fen, ctx)
+            queue.put_nowait({"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": graph is not None})
 
         task = asyncio.create_task(pump())
         try:
