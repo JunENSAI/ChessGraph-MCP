@@ -45,6 +45,35 @@ export function chartLabel(name: string, eco: string): string {
   return `${clipped} (${eco})`
 }
 
+/**
+ * Whole-number shares of wins, draws and losses that add up to 100
+ * (largest remainder), so a bar's segments and its labels always agree.
+ */
+export function resultShares(counts: { wins: number; draws: number; losses: number }): {
+  wins: number
+  draws: number
+  losses: number
+} {
+  const total = gamesIn(counts)
+  if (total === 0) return { wins: 0, draws: 0, losses: 0 }
+  const keys = ['wins', 'draws', 'losses'] as const
+  const exact = keys.map(key => (counts[key] * 100) / total)
+  const floors = exact.map(Math.floor)
+  let left = 100 - floors.reduce((sum, value) => sum + value, 0)
+  const order = exact.map((value, index) => ({ index, rest: value - floors[index] })).sort((a, b) => b.rest - a.rest)
+  for (const { index } of order) {
+    if (left <= 0) break
+    floors[index] += 1
+    left -= 1
+  }
+  return { wins: floors[0], draws: floors[1], losses: floors[2] }
+}
+
+/** The most played lines first, at most ``limit``. */
+export function topLines(items: OpeningStat[], limit = 6): OpeningStat[] {
+  return [...items].sort((a, b) => gamesIn(b.results) - gamesIn(a.results) || a.name.localeCompare(b.name)).slice(0, limit)
+}
+
 export async function loadRecap(fetchImpl: typeof fetch = fetch): Promise<RecapPayload> {
   const response = await fetchImpl('/api/recap')
   if (!response.ok) {

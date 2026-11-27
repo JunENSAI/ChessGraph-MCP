@@ -950,3 +950,78 @@ New tests:
 - `ui/src/lib/lines.test.ts`: colours, first-move arrows, a fading path that
   stops at an illegal move, eval labels including mate, and the human reason.
 - `ui/src/services/coach.test.ts`: `lines` is streamed, attached and cached.
+
+## Batch 10: refined dark design, Home recap, layout that fits
+
+### Why
+
+- The Home page repeated its headers ("Games in band" and "Most played clock"
+  appeared twice) and left empty bands under short charts.
+- The app had no gradient and many hard-coded colours.
+- At 1024×768 the coach box sat below the fold, because the layout dropped to
+  one column at 1180px.
+
+### Changed
+
+- `ui/src/index.css`:
+  - New tokens for the refined dark look:
+    - a deep-green to slate gradient behind the page (`--bg-gradient`);
+    - glass cards (`--surface-glass`, `--glass-border`, `--glass-blur`) on the
+      top bar, panels, KPI tiles and recap cards;
+    - `--surface-sunken`, plus border and soft tokens for lime, blue and red.
+  - The hard-coded hex values are now these tokens. Board square colours stay
+    as they are.
+- **Chart palette:**
+  - Win, draw and loss form a diverging scale: `--win #199e70`,
+    `--draw #4a505b` (neutral midpoint) and `--loss #d95926`.
+  - `scripts/validate_palette.js` from the dataviz skill checked it on the dark
+    surface:
+    - the win/loss poles pass every check;
+    - the three colours pass colour-blind separation (worst adjacent ΔE 16.0)
+      and the normal-vision floor (23.3);
+    - the grey midpoint fails the lightness and chroma checks, as a neutral
+      midpoint does by design.
+  - The earlier lime/red pair failed for deuteranopia (ΔE 3.3).
+  - `ui/src/lib/palette.ts` holds the same values for code that cannot read CSS
+    variables.
+- `ui/src/components/ScoreBar.tsx`: one W/D/L 100% bar with 2px gaps, rounded
+  ends, a hover count per segment and a screen-reader label, plus
+  `ScoreLegend`. Batch 11 reuses it.
+- **Home (`ui/src/views/RecapView.tsx`), rebuilt:**
+  - The KPI strip stays.
+  - **Results:** a single table with a W/D/L bar per row, by colour and by time
+    control, with games, win % and average opponent Elo. It replaces the 5
+    duplicated charts.
+  - **Repertoire · White** and **Repertoire · Black** side by side: the top 6
+    lines, each with a short label (`chartLabel`), its family when the line is
+    a variation, the games, a bar and the win %.
+  - The cards size to their content.
+  - Home no longer uses Recharts, and `StatCard.tsx` (now unused) is removed.
+- `ui/src/data/recap.ts`: `resultShares` (whole-number shares that sum to 100)
+  and `topLines`.
+- **Layout:**
+  - The board and the side panel stay side by side down to 900px (side panel
+    `clamp(300px, 36vw, 380px)`). The layout switches to one column only below
+    900px.
+  - On phones the Elo column is hidden.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `cd ui && npm test` | 101 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npm run build` | built |
+| `uv run pytest` | 186 passed, 7 skipped (no backend change) |
+
+In the browser:
+
+- **1440×900:** Home shows the KPI strip, the results table (By colour, then
+  Bullet 861, Blitz 488, Bot 66, Rapid 4 in the 2000+ band) and the two
+  repertoire cards, with no empty bands.
+- **1024×768:** Play & train keeps the board and the Coach tab side by side.
+  The composer sits at 703–741px of 768, and the page does not scroll.
+- **375×812:** no horizontal scroll (scroll width 375).
+
+New tests in `ui/src/data/recap.test.ts`: shares that sum to 100 (thirds, a
+zero row, odd counts) and the order of the top lines.
