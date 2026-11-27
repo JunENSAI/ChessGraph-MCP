@@ -198,10 +198,10 @@ describe('askCoach', () => {
   it('turns an error event into a CoachUnavailableError', async () => {
     const events: CoachEvent[] = [
       { type: 'start', mode: 'claude', model: 'claude-opus-5-5' },
-      { type: 'error', message: 'Anthropic rejected ANTHROPIC_API_KEY.' },
+      { type: 'error', message: 'Claude Code is not logged in. Run `claude` once and use /login, then ask again.' },
     ]
     vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events.map(frame))))
-    await expect(askCoach('q', context, {}, memoryStore())).rejects.toThrow(/ANTHROPIC_API_KEY/)
+    await expect(askCoach('q', context, {}, memoryStore())).rejects.toThrow(/not logged in/)
   })
 
   it('reports a down store from the API error body', async () => {

@@ -640,3 +640,75 @@ New tests:
 ### Not done
 
 - No visual regression test: the browser checks above were run by hand.
+
+## Batch 6: the coach runs on the Claude Code login, not an API key
+
+Branch `feat/subscription-coach`.
+
+### Why
+
+- The coach needed a paid `ANTHROPIC_API_KEY`. Without one, the UI only had the
+  offline template.
+- The Claude subscription is already logged in for Claude Code. The Claude
+  Agent SDK can run the coach through that login, with the same tools.
+
+### Changed
+
+- `pyproject.toml`: `claude-agent-sdk>=0.2.189` replaces `anthropic`. The SDK
+  bundles the Claude Code CLI.
+- `backend/coach/providers.py`: `ClaudeProvider` now runs
+  `claude_agent_sdk.query`. Its `run` is an async generator.
+  - It uses `claude-opus-5-5` at effort `low` (`CLAUDE_MODEL`, `CLAUDE_EFFORT`)
+    and the coach system prompt, which replaces Claude Code's own.
+  - Isolation: `tools=[]` (no Bash, Read and so on), `setting_sources=[]` (no
+    user or project settings, hooks or CLAUDE.md) and `strict_mcp_config=True`.
+    Only the fourteen coach tools are offered, through an in-process MCP server
+    (`mcp__coach__*`).
+  - Each tool still goes through `run_tool`: Pydantic validation, then
+    username redaction. One lock serializes the calls, because a single
+    Stockfish process serves the coach.
+  - The SSE events are unchanged (`start`, `tool_start`, `tool_end`, `text`,
+    `done`, `error`), so the UI did not change. Text streams from the SDK's
+    partial messages.
+  - Errors become safe messages: a missing login says to run `claude` and
+    `/login`; a missing CLI, a refusal and the turn cap (`max_turns`, 8) each
+    have their own message. stderr and the prompt are never shown.
+  - Removed: the Messages API loop, `api_error_message`, the refusal-fallback
+    beta, prompt caching parameters.
+- `backend/coach/prompt.py`: `prompt_text` replaces `conversation`. Earlier
+  turns go in as text before the board context, because each question is one
+  `query`.
+- `backend/coach/__init__.py`: `COACH_MODE` is `claude` (default) or
+  `offline`. `ANTHROPIC_API_KEY` and `CLAUDE_REFUSAL_FALLBACK` are gone.
+- `backend/main.py`: `/api/coach/chat` streams both sync providers (offline)
+  and async providers (Claude).
+- `.env.template`: the coach block now describes the login, and notes that it
+  is for personal, local use only.
+- `ui/src/services/coach.ts`: doc comment only. `coach.test.ts`: the error
+  fixture is the login message.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 174 passed, 5 skipped (the opt-in integration tests) |
+| `cd ui && npm test` | 93 passed |
+| `cd ui && npm run build` | built; same chunk-size warning as before |
+| `curl -N POST /api/coach/chat` (start position, live stores, your login) | `start` → `get_coaching_brief` (postgres) → `get_position_moves` (neo4j) → `analyze_position` (stockfish) → text → `done`, in 10.7 s; model `claude-opus-5-5` |
+| Account-name scan of that SSE stream | no match |
+| SDK probe: init message | model `claude-opus-5-5`, tools only `mcp__coach__*`, `apiKeySource: none` (the subscription login) |
+
+In the browser (in-app preview, 1440×900): on Play & train, Coach tab, "Who is
+better here and what is the plan?" got a Claude answer with the Games, Graph
+and Stockfish chips lit and the recommended 1.d4 drawn on the board.
+
+New and rewritten tests in `tests/test_coach.py`: a scripted fake `query` calls
+the real tool handlers. They cover event order and tool sources, redaction of
+tool results, the session options (model, effort, no built-in tools, no
+settings, only coach tools), invalid input and a down store as `is_error`
+results, the turn cap, a refusal, a missing login, CLI and process errors
+without stderr, `prompt_text`, the mode settings, and the async SSE route.
+
+### Not done
+
+- The README still describes the API key. That is batch 8.

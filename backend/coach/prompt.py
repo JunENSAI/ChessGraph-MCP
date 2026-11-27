@@ -77,20 +77,13 @@ def user_turn(request: CoachRequest) -> str:
     return "\n".join(lines)
 
 
-def conversation(request: CoachRequest) -> list[dict[str, str]]:
-    """Prior text turns (no tool traffic) followed by the new user turn."""
-    messages: list[dict[str, str]] = []
-    for turn in request.history:
-        role = "user" if turn.role == "user" else "assistant"
-        if messages and messages[-1]["role"] == role:
-            messages[-1]["content"] += "\n\n" + turn.text
-        else:
-            messages.append({"role": role, "content": turn.text})
-    # The API needs the conversation to start with a user turn.
-    while messages and messages[0]["role"] != "user":
-        messages.pop(0)
-    if messages and messages[-1]["role"] == "user":
-        messages[-1]["content"] += "\n\n" + user_turn(request)
-    else:
-        messages.append({"role": "user", "content": user_turn(request)})
-    return messages
+def prompt_text(request: CoachRequest) -> str:
+    """One prompt for a one-shot Claude Code query: earlier turns as text, then the user turn."""
+    earlier = [
+        f"{'Me' if turn.role == 'user' else 'Coach'}: {turn.text.strip()}"
+        for turn in request.history
+        if turn.text.strip()
+    ]
+    if not earlier:
+        return user_turn(request)
+    return "Earlier in this conversation:\n" + "\n\n".join(earlier) + "\n\n---\n\n" + user_turn(request)
