@@ -37,7 +37,7 @@ from .recap import (
     build_coaching_brief,
     build_recap,
 )
-from .training_plan import TrainingPlan, rank_plan
+from .training_plan import TrainingPlan, TrainingProgram, build_program, rank_plan
 
 
 _SET_TIMEOUT = text(
@@ -958,6 +958,30 @@ class PostgresRepository:
             calculation_rows=rows["calculation"],
             theory_rows=rows["theory"],
             time_rows=self._time_rows(player),
+        )
+
+    def get_training_program(self, player: str) -> TrainingProgram:
+        """One focus for seven days: the plan's top drillable opening and its stored mistakes."""
+        if not player.strip():
+            raise ValueError("player is required")
+        rows = self._coaching_rows(player)
+        plan = rank_plan(
+            family_rows=rows["family"],
+            split_rows=rows["split"],
+            calculation_rows=rows["calculation"],
+            theory_rows=rows["theory"],
+        )
+        lines = [
+            (lesson.opening_name, color, lesson.games, lesson.uci_line or "")
+            for color in ("white", "black")
+            for lesson in self.list_opening_lessons(player=player, color=color, limit=40)
+        ]
+        summary = self.get_player_summary(player)
+        return build_program(
+            plan,
+            lines=lines,
+            split_rows=rows["split"],
+            average_rating=summary.average_rating,
         )
 
 

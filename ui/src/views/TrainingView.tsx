@@ -3,6 +3,7 @@ import { Chess, type Square } from 'chess.js'
 import {
   ArrowUpDown,
   BookOpen,
+  Check,
   ChevronLeft,
   ChevronRight,
   ClipboardCopy,
@@ -43,7 +44,20 @@ import {
 import { endgameTitle, groupOpenings, openingFamilyName } from '../data/openings'
 import { RepertoireList } from '../components/RepertoireList'
 import { ScoreLegend } from '../components/ScoreBar'
-import { loadTrainingPlan, orderPlan, planSummary, type PlanItem, type TrainingPlan } from '../data/plan'
+import {
+  loadProgress,
+  loadTrainingPlan,
+  loadTrainingProgram,
+  nextDay,
+  orderPlan,
+  planSummary,
+  saveProgress,
+  toggleDay,
+  type PlanItem,
+  type ProgramDay,
+  type TrainingPlan,
+  type TrainingProgram,
+} from '../data/plan'
 import type { Color } from '../data/types'
 import { useBoardKeys } from '../hooks/useBoardKeys'
 import { useChessClock } from '../hooks/useChessClock'
@@ -109,7 +123,13 @@ export function TrainingView({ active = true }: { active?: boolean }) {
   const [endgameId, setEndgameId] = useState('')
   const [playColor, setPlayColor] = useState<Color>('white')
   const [strengthId, setStrengthId] = useState<string | null>(null)
-  const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play' | 'course'>('opening')
+  const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play' | 'course' | 'program'>('opening')
+  // The week's program, this viewer's ticks, the day shown and the mistake position on the board.
+  const [program, setProgram] = useState<TrainingProgram | null>(null)
+  const [programStatus, setProgramStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [programDone, setProgramDone] = useState<number[]>([])
+  const [programDay, setProgramDay] = useState<number | null>(null)
+  const [programPosition, setProgramPosition] = useState<{ day: number; index: number } | null>(null)
   const [plan, setPlan] = useState<TrainingPlan | null>(null)
   const [planStatus, setPlanStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [watching, setWatching] = useState(false)
@@ -369,6 +389,18 @@ export function TrainingView({ active = true }: { active?: boolean }) {
         setPlan(null)
         setPlanStatus('error')
       })
+    loadTrainingProgram()
+      .then(next => {
+        if (!live) return
+        const done = loadProgress(next)
+        setProgram(next)
+        setProgramDone(done)
+        setProgramDay(nextDay(next, done) ?? next.days.at(-1)?.day ?? null)
+        setProgramStatus('ready')
+      })
+      .catch(() => {
+        if (live) setProgramStatus('error')
+      })
     Promise.all([loadOpeningLessons('white'), loadOpeningLessons('black'), loadEndgameLessons()])
       .then(([white, black, endgame]) => {
         if (!live) return
@@ -589,6 +621,58 @@ export function TrainingView({ active = true }: { active?: boolean }) {
 
   /** The plan item's reason starts with its family, so the family is the text before the first colon. */
   const planFamily = (entry: PlanItem) => entry.reason.split(':')[0].trim()
+
+  const dayTask = (day: ProgramDay, kind: TrainingTask['kind'], over: Partial<TrainingTask> = {}): TrainingTask => ({
+    kind,
+    title: program?.title ?? day.title,
+    reason: day.goal,
+    start_fen: day.start_fen,
+    uci_line: day.uci_line,
+    pgn_line: '',
+    user_color: day.user_color,
+    ready: true,
+    puzzle_fens: [],
+    ...over,
+  })
+
+  const startMistake = (day: ProgramDay, index: number) => {
+    const position = day.positions[index]
+    if (!position) return
+    setProgramPosition({ day: day.day, index })
+    loadSession(
+      sessionFromTask(dayTask(day, 'puzzle', { start_fen: position.fen, uci_line: position.best_uci, title: `${day.title} · ${index + 1} of ${day.positions.length}` })),
+      true,
+    )
+    const hint = day.day === 3 ? ` You played ${position.played_san} here ${position.times} times, losing ${position.average_cp_loss} cp on average.` : ''
+    coach.say(`Position ${index + 1} of ${day.positions.length}.${hint} Find the stored engine move.`)
+  }
+
+  const startDay = (day: ProgramDay) => {
+    setActiveKind('program')
+    setProgramDay(day.day)
+    setProgramPosition(null)
+    if (day.kind === 'learn') {
+      loadSession(sessionFromTask(dayTask(day, 'opening')), true)
+    } else if (day.kind === 'drill') {
+      loadSession({ ...sessionFromTask(dayTask(day, 'opening')), watch: false }, true)
+    } else if (day.kind === 'mistakes') {
+      startMistake(day, 0)
+    } else if (day.kind === 'play') {
+      if (day.opponent_elo !== null) setStrengthId(levelForRating(day.opponent_elo).id)
+      loadSession({ ...sessionFromTask(dayTask(day, 'opening')), watch: false, engineAfter: true }, true)
+      setTab('moves')
+    } else {
+      coach.say(day.goal)
+    }
+  }
+
+  const tickDay = (day: number) => {
+    if (!program) return
+    const done = toggleDay(programDone, day)
+    setProgramDone(done)
+    saveProgress(program, done)
+    if (!programDone.includes(day)) setProgramDay(nextDay(program, done) ?? day)
+  }
 
   const startPlanItem = (entry: PlanItem) => {
     setActiveKind('course')
@@ -891,28 +975,94 @@ export function TrainingView({ active = true }: { active?: boolean }) {
         </span>
       </article>
 
-      <article className={`track-card${activeKind === 'course' ? ' active' : ''}`}>
-        <span className="eyebrow">Your training plan</span>
-        {planStatus === 'ready' && plan ? (
+      <article className={`track-card program-card${activeKind === 'program' ? ' active' : ''}`}>
+        <span className="eyebrow">This week{program?.focus ? ` · ${program.focus}` : ''}</span>
+        {programStatus === 'ready' && program && program.days.length > 0 ? (
           <>
-            <p className="muted small">{planSummary(plan)}</p>
-            {orderPlan(plan.items).map(entry => (
-              <button
-                key={`${entry.kind}:${entry.title}`}
-                type="button"
-                className="btn task-choice"
-                disabled={!entry.ready}
-                onClick={() => startPlanItem(entry)}
-              >
-                {entry.title}
-                <span>{entry.reason}</span>
-                <span className="muted small">Goal: {entry.goal}</span>
-              </button>
-            ))}
+            <p className="muted small">
+              {program.title} · you play {program.user_color === 'white' ? 'White' : 'Black'} · {programDone.length} of {program.days.length} done
+            </p>
+            <ol className="day-tiles" aria-label="Seven days">
+              {program.days.map(day => {
+                const done = programDone.includes(day.day)
+                const today = day.day === nextDay(program, programDone)
+                return (
+                  <li key={day.day}>
+                    <button
+                      type="button"
+                      className={`day-tile${done ? ' done' : ''}${today ? ' today' : ''}${day.day === programDay ? ' shown' : ''}`}
+                      aria-current={today ? 'step' : undefined}
+                      aria-label={`Day ${day.day}: ${day.title}${done ? ', done' : ''}`}
+                      onClick={() => setProgramDay(day.day)}
+                    >
+                      <span className="day-number">{done ? <Check size={12} /> : day.day}</span>
+                      <span className="day-kind">{DAY_LABEL[day.kind]}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ol>
+            {(() => {
+              const day = program?.days.find(item => item.day === programDay) ?? null
+              if (!day) return null
+              const position = programPosition?.day === day.day ? programPosition.index : null
+              return (
+                <div className="day-detail">
+                  <strong>
+                    Day {day.day} · {day.title}
+                  </strong>
+                  <span>{day.goal}</span>
+                  <div className="day-actions">
+                    {day.kind !== 'review' && (
+                      <button type="button" className="btn primary" onClick={() => startDay(day)}>
+                        <Play size={13} /> {position === null ? 'Start' : 'Restart'}
+                      </button>
+                    )}
+                    {day.kind === 'mistakes' && position !== null && position + 1 < day.positions.length && (
+                      <button type="button" className="btn" onClick={() => startMistake(day, position + 1)}>
+                        Next position ({position + 2} of {day.positions.length})
+                      </button>
+                    )}
+                    <button type="button" className={`btn${programDone.includes(day.day) ? ' active' : ''}`} onClick={() => tickDay(day.day)}>
+                      <Check size={13} /> {programDone.includes(day.day) ? 'Done' : 'Mark done'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
           </>
         ) : (
-          <span>{planStatus === 'error' ? 'The training plan could not be loaded.' : 'Reading your games…'}</span>
+          <span className="muted small">
+            {programStatus === 'error'
+              ? 'The weekly program could not be loaded.'
+              : programStatus === 'loading'
+                ? 'Reading your games…'
+                : program?.notes[0] ?? 'No weekly focus yet.'}
+          </span>
         )}
+        <details className="all-drills">
+          <summary>All drills{plan ? ` (${plan.items.length})` : ''}</summary>
+          {planStatus === 'ready' && plan ? (
+            <>
+              <p className="muted small">{planSummary(plan)}</p>
+              {orderPlan(plan.items).map(entry => (
+                <button
+                  key={`${entry.kind}:${entry.title}`}
+                  type="button"
+                  className="btn task-choice"
+                  disabled={!entry.ready}
+                  onClick={() => startPlanItem(entry)}
+                >
+                  {entry.title}
+                  <span>{entry.reason}</span>
+                  <span className="muted small">Goal: {entry.goal}</span>
+                </button>
+              ))}
+            </>
+          ) : (
+            <span>{planStatus === 'error' ? 'The training plan could not be loaded.' : 'Reading your games…'}</span>
+          )}
+        </details>
       </article>
 
       {catalogError && <p className="muted small">{catalogError}</p>}
@@ -1078,6 +1228,15 @@ export function TrainingView({ active = true }: { active?: boolean }) {
       />
     </div>
   )
+}
+
+/** Tile words short enough for seven tiles in a row. */
+const DAY_LABEL: Record<ProgramDay['kind'], string> = {
+  learn: 'Learn',
+  drill: 'Drill',
+  mistakes: 'Fix',
+  play: 'Play',
+  review: 'Review',
 }
 
 function endgameKey(lesson: EndgameLesson): string {

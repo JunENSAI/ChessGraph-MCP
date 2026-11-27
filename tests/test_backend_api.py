@@ -121,6 +121,32 @@ def test_opening_lessons_use_the_requested_color() -> None:
     assert (body["lessons"][0]["wins"], body["lessons"][0]["draws"], body["lessons"][0]["losses"]) == (6, 2, 4)
 
 
+def test_coach_program_route_reads_the_configured_player() -> None:
+    from chess_mcp.postgres.training_plan import ProgramDay, TrainingProgram
+
+    class ProgramPostgres(FakePostgres):
+        def __init__(self) -> None:
+            self.players: list[str] = []
+
+        def get_training_program(self, player: str) -> TrainingProgram:
+            self.players.append(player)
+            return TrainingProgram(
+                focus="Caro-Kann Defense",
+                title="Caro-Kann Defense: Main Line",
+                user_color="black",
+                days=[ProgramDay(day=1, kind="learn", title="Learn the line", goal="Watch it.", user_color="black")],
+            )
+
+    postgres = ProgramPostgres()
+    client = TestClient(create_app(postgres=postgres))
+    response = client.get("/api/coach/program", params={"player": "junior"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["focus"] == "Caro-Kann Defense"
+    assert body["days"][0]["kind"] == "learn"
+    assert postgres.players == ["junior"]
+
+
 def test_endgame_lessons_use_the_player_rating() -> None:
     postgres = LessonPostgres()
     client = TestClient(create_app(postgres=postgres))

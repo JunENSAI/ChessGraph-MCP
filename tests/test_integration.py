@@ -46,6 +46,22 @@ def test_opening_lessons_count_results_from_the_player_side() -> None:
         repository.close()
 
 
+def test_training_program_is_seven_days_or_says_why_not() -> None:
+    repository = PostgresRepository.from_settings(get_postgres_settings())
+    try:
+        program = repository.get_training_program(get_chess_username())
+        if program.focus is None:
+            assert program.notes and program.days == []
+        else:
+            assert [day.day for day in program.days] == [1, 2, 3, 4, 5, 6, 7]
+            for day in program.days:
+                for position in day.positions:
+                    assert position.average_cp_loss >= 50
+                    assert chess.Move.from_uci(position.best_uci) in chess.Board(f"{position.fen} 0 1").legal_moves
+    finally:
+        repository.close()
+
+
 def test_neo4j_read_connection() -> None:
     repository = Neo4jRepository.from_settings(get_neo4j_settings())
     try:

@@ -1393,6 +1393,114 @@ p {
   white-space: nowrap;
 }
 
+/* This week: one focus, seven days (Play tab) */
+
+.program-card {
+  gap: 8px;
+}
+
+.program-card > p {
+  margin: 0;
+}
+
+.day-tiles {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.day-tile {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 6px 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--muted);
+}
+
+.day-tile:hover {
+  border-color: var(--line-strong);
+}
+
+.day-tile:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 1px;
+}
+
+.day-number {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.day-kind {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.day-tile.today {
+  border-color: var(--lime-border);
+  color: var(--text);
+}
+
+.day-tile.today .day-number {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.day-tile.done .day-number {
+  background: var(--lime-soft);
+  color: var(--lime);
+}
+
+.day-tile.shown {
+  background: var(--surface-3);
+  box-shadow: inset 0 -2px 0 var(--lime);
+}
+
+.day-detail {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  font-size: 12px;
+}
+
+.day-detail > span {
+  color: var(--muted);
+}
+
+.day-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.all-drills summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.all-drills[open] summary {
+  margin-bottom: 6px;
+}
+
 /* Openings repertoire (Play tab) */
 
 .repertoire-head {

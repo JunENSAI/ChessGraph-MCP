@@ -211,6 +211,14 @@ def create_app(
         selected = configured_player(player)
         return repo.get_training_plan(selected)
 
+    @app.get("/api/coach/program")
+    def coaching_program(
+        player: str | None = None,
+        repo: PostgresRepository = Depends(postgres_repo),
+    ):
+        selected = configured_player(player)
+        return repo.get_training_program(selected)
+
     def coach_provider(request: Request) -> CoachProvider:
         if request.app.state.coach is None:
             request.app.state.coach = provider_from_settings()

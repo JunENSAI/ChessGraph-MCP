@@ -1121,3 +1121,101 @@ In the browser:
   "12… Bf5 -0.6 · 3 cp loss", and a click moved the board to 12… Bf5.
 - **1024×640:** the card, key moment and move list fit, and the tab scrolls.
 - **375×812:** no horizontal scroll on either view.
+
+## Batch 12: one focus, a 7-day program
+
+### Why
+
+The Play tab listed six ranked drills with no order to follow. In the live
+data, all six were also marked not ready: the family's first stored theory
+line is the bare opening (for example "Caro-Kann Defense", 2 plies), under the
+6 plies a drill needs.
+
+### Changed
+
+- **`chess_mcp/postgres/training_plan.py` → `build_program(plan, *, lines,
+  split_rows, average_rating)`**, a pure function, with the models
+  `TrainingProgram`, `ProgramDay` and `ProgramPosition`:
+  - **The focus** is the highest-ranked opening or defense with a line to
+    drill. The line is your most played variant of that family with a stored
+    line of at least `MIN_DRILL_PLIES`; the plan item's own line is the
+    fallback. So the plan's weakest family is kept, and its drill uses a line
+    you actually play (live: Caro-Kann Defense: Main Line, as Black).
+  - **The seven days:**
+    1. learn (watch the line);
+    2. drill (play your side);
+    3. fix: the family's repeated moves with you to move that lose at least
+       50 cp (`SEVERITY_MIN_CP["inaccuracy"]`), costliest first (times × average
+       loss), at most 5, each with the stored engine move;
+    4. play the line, then Stockfish at your rounded average rating;
+    5. fix again, without the hint;
+    6. play again;
+    7. review, quoting the family's stored record and the plan goal.
+  - With no stored mistake, days 3 and 5 drill the line again, and a note says
+    so. With no drillable line at all, the program is empty and a note says
+    why.
+- `PostgresRepository.get_training_program(player)` reads:
+  - the brief's rows;
+  - the plan ranking;
+  - your opening lessons for both colours;
+  - your average rating.
+
+  All of these are existing read-only queries.
+- The new route `GET /api/coach/program` is read-only.
+- **UI (Play & train → Play tab):** the "This week · <focus>" card:
+  - **Seven day tiles.** Today, the first day not ticked, is lime. Done days
+    show a tick.
+  - **Day detail** with Start and Mark done:
+    - Start reuses the existing lesson sessions: watch, drill, a one-move
+      lesson per mistake position with "Next position (n of 5)", and the line
+      followed by Stockfish.
+    - The play days set the strength to the level nearest your average rating
+      (1836 → 1800).
+  - **Progress** lives in `localStorage` (`chessgraph-program`) and is keyed by
+    focus, line and colour, so a new focus starts a new week. Every read and
+    write is wrapped, so blocked storage only loses the ticks. The stores stay
+    read-only.
+  - The full ranked plan moved under a collapsed "All drills".
+- **Docs:** `README.md` (the program, the routes, the UI tour) and
+  `backend/README.md` (the route).
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 192 passed, 9 skipped |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 9 passed |
+| `cd ui && npm test` | 111 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npx tsc -b && npm run build` | built |
+
+New tests:
+
+- `tests/test_training_plan.py`:
+  - seven days on the top family with its most played long line;
+  - the opponent Elo from the average rating;
+  - the mistake filter (an inaccuracy or worse, your side to move, the same
+    family, the costlier duplicate kept);
+  - drilling again without mistakes;
+  - the fallback to the next family;
+  - the empty program.
+- `tests/test_backend_api.py`: the route reads the configured player.
+- `tests/test_integration.py`: on the real stores, seven days or an
+  explanation. Every stored best move is legal in its position.
+- `ui/src/data/plan.test.ts`: today's day, ticks saved per program and dropped
+  when the focus changes, and broken or blocked storage.
+
+Live (Caro-Kann, as Black), the day 3 positions were Bg6 (6 times, 121 cp),
+Bg6 (5 times, 109 cp), Nf6 (6 times, 68 cp), Nf6 (4 times, 97 cp) and gxf6
+(6 times, 57 cp).
+
+In the browser:
+
+- **1024×640:**
+  - seven tiles, labelled Learn, Drill, Fix, Play, Fix, Play and Review;
+  - Start on day 3 loaded "Move 1 of 1 · Black to move", and the coach said
+    "You played Bg6 here 5 times, losing 109 cp on average" for position 2;
+  - ticking days 1 and 3 moved today to day 2 and survived a reload;
+  - Start on day 4 set Stockfish to 1800.
+- **375×812:** no horizontal scroll.
+- The test ticks were cleared from the preview browser afterwards.

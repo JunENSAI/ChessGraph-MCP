@@ -22,6 +22,7 @@ The Vite dev server proxies `/api` to `BACKEND_URL` (default
 | `GET /api/lessons/endgames` | Endgame benchmarks for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest family, repeated mistakes, four tasks |
 | `GET /api/coach/plan` | Ranked training plan |
+| `GET /api/coach/program` | One focus for seven days: learn, drill, the stored mistakes, play at your rating, review |
 | `GET /api/openings?fen=` | Opening-file rows for that position |
 | `GET /api/positions?fen=` | Neo4j context and moves |
 | `GET /api/explorer?fen=` | Graph v2 moves (book, yours, opponents'), context, and your games through the position; an unknown position is an empty answer, not a 404 |
