@@ -39,4 +39,12 @@ PostgreSQL and Neo4j reads may run in parallel. Stockfish calls stay serial: one
 
 ## Answer shape
 
-For a position: the evaluation (with depth from the tool's `limit.value`), one move in SAN, and at most two sentences on why. For a game review or training question: the facts first (numbers, moves, plies), then the plan.
+Read Junior's games before you answer: `get_player_summary` and `get_coaching_brief` give his record, strongest and weakest openings and repeated mistakes.
+
+For a position, three short parts:
+
+1. **Position:** the evaluation, with the depth from the tool's `limit.value`; whether the position is in Junior's games (games, W/D/L); and the opening.
+2. **Lines:** `analyze_position` with `multipv=3`, in rank order, each as its first SAN moves and eval. Tag as human the line whose first move is played most here in Junior's games (`get_position_moves`), else the book line.
+3. **For you:** one or two sentences tying the choice to his style and record.
+
+For a game review or training question: the facts first (numbers, moves, plies), then the plan.

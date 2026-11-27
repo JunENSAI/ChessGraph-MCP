@@ -141,6 +141,9 @@ class OpeningLesson(PostgresModel):
     opening_name: str
     eco_code: str | None = None
     games: int = Field(ge=0)
+    wins: int = Field(default=0, ge=0)
+    draws: int = Field(default=0, ge=0)
+    losses: int = Field(default=0, ge=0)
     uci_line: str | None = None
     pgn_line: str | None = None
 

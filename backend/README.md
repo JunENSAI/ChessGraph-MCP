@@ -18,10 +18,11 @@ The Vite dev server proxies `/api` to `BACKEND_URL` (default
 | `GET /api/games/{id}` | One game |
 | `GET /api/games/{id}/moves` | Ordered moves |
 | `GET /api/player` | Summary for `CHESS_USERNAME` when `username` is omitted |
-| `GET /api/lessons/openings?color=` | Opening lines to drill for one colour |
+| `GET /api/lessons/openings?color=` | Opening lines to drill for one colour, with games and W/D/L from your side |
 | `GET /api/lessons/endgames` | Endgame benchmarks for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest family, repeated mistakes, four tasks |
 | `GET /api/coach/plan` | Ranked training plan |
+| `GET /api/coach/program` | One focus for seven days: learn, drill, the stored mistakes, play at your rating, review |
 | `GET /api/openings?fen=` | Opening-file rows for that position |
 | `GET /api/positions?fen=` | Neo4j context and moves |
 | `GET /api/explorer?fen=` | Graph v2 moves (book, yours, opponents'), context, and your games through the position; an unknown position is an empty answer, not a 404 |
@@ -62,8 +63,11 @@ process that dies answers 503.
 - **`providers.py`** has two providers:
   - `ClaudeProvider` runs Claude through the Claude Agent SDK, on the local
     Claude Code login, with no API key.
-    - First it fetches the graph context, reported as `get_style_context` on
-      the `neo4j` source.
+    - First it fetches the evidence in the CLAUDE.md order: the player profile
+      (`get_player_profile`, postgres, cached for 10 minutes), the graph context
+      (`get_style_context`, neo4j) and the 3 candidate lines
+      (`analyze_position` with MultiPV 3, stockfish). The lines go to the UI as a
+      `lines` event and all three go into the prompt.
     - Then it runs one `query()` with the coach system prompt and these
       options: `tools=[]`, `setting_sources=[]`, `strict_mcp_config=True`, and
       the fourteen tools as an in-process MCP server (`mcp__coach__*`).
@@ -87,6 +91,7 @@ It answers with `text/event-stream`. Each `data:` line is one JSON event:
 | `start` | `mode`, `model` |
 | `tool_start` | `tool`, `source` |
 | `tool_end` | `tool`, `source`, `ok` |
+| `lines` | `root_player`, `depth`, `lines`: Stockfish's top 3 from the position, each with `rank`, `uci`, `san`, `score` (side to move), `games`, `book`, `human` |
 | `text` | `text` (append) |
 | `done` | `mode`, `stop_reason` |
 | `error` | `message` |

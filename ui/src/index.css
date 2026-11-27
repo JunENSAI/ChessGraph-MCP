@@ -19,12 +19,40 @@
   --amber: #ffc46b;
   --radius: 14px;
   --shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  /* Refined dark look: a deep-green to slate gradient behind glassy cards. */
+  --bg-gradient:
+    radial-gradient(1100px 620px at 6% -14%, rgba(124, 196, 68, 0.11), transparent 62%),
+    radial-gradient(900px 560px at 102% -4%, rgba(57, 135, 229, 0.08), transparent 58%),
+    linear-gradient(180deg, #0b1411 0%, #0a0e13 52%, #080a0d 100%);
+  --surface-glass: rgba(16, 20, 26, 0.74);
+  --surface-sunken: #0b0e12;
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --glass-blur: blur(14px) saturate(1.15);
+  --lime-hover: #c8f77a;
+  --lime-border: #415b2b;
+  --blue-border: #526379;
+  --red-border: #65312f;
+  --red-soft: #211111;
+  --red-softer: #2b1211;
+  --orange: #ff9f5a;
+  /* Chart palette: win / draw / loss is diverging (two poles, a neutral gray middle),
+     validated for color-blind separation on the dark surface. */
+  --win: #199e70;
+  --draw: #4a505b;
+  --loss: #d95926;
+  --chart-grid: #232a35;
+  /* Mid grey, so White's light area and Black's dark area both read against it. */
+  --eval-plot: #2a313c;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 14px;
   line-height: 1.45;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background: var(--bg-gradient) fixed, var(--bg);
 }
 
 * {
@@ -119,9 +147,10 @@ p {
   align-items: center;
   gap: 16px;
   padding: 10px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: rgba(15, 18, 23, 0.92);
+  background: var(--surface-glass);
+  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow);
 }
 
@@ -157,7 +186,7 @@ p {
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: 11px;
-  background: #0b0e12;
+  background: var(--surface-sunken);
 }
 
 .mode-switch button {
@@ -209,9 +238,10 @@ p {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-glass);
+  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -280,11 +310,11 @@ p {
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: #c8f77a;
+  background: var(--lime-hover);
 }
 
 .btn.active {
-  border-color: #415b2b;
+  border-color: var(--lime-border);
   background: var(--lime-soft);
   color: var(--lime);
 }
@@ -321,6 +351,64 @@ p {
 .chip:hover:not(:disabled) {
   border-color: var(--line-strong);
   color: var(--text);
+}
+
+/* Coach candidate lines: one chip per Stockfish line, in its board arrow color */
+
+.line-chips {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.line-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-color);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.line-chip:hover,
+.line-chip.active {
+  border-color: var(--line-color);
+  background: color-mix(in srgb, var(--line-color) 12%, var(--surface-2));
+}
+
+.line-rank {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--line-color);
+  color: var(--lime-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.line-moves {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.line-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--lime-soft);
+  color: var(--lime);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 /* Board stage: the board is sized to the viewport height */
@@ -579,8 +667,8 @@ p {
 }
 
 .clock.low {
-  border-color: #65312f;
-  background: #211111;
+  border-color: var(--red-border);
+  background: var(--red-soft);
   color: var(--red);
 }
 
@@ -592,7 +680,7 @@ p {
 
 .clock.flagged {
   border-color: var(--red);
-  background: #2b1211;
+  background: var(--red-softer);
   color: var(--red);
 }
 
@@ -708,7 +796,15 @@ p {
 
 .explorer-record {
   flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 3px;
   text-align: right;
+}
+
+.explorer-record .score-bar {
+  width: 110px;
+  min-width: 0;
 }
 
 .explorer-record strong {
@@ -806,7 +902,7 @@ p {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #0c0f13;
+  background: var(--surface-sunken);
 }
 
 .mt-row {
@@ -851,7 +947,7 @@ p {
 .mt-move.current {
   background: var(--lime-soft);
   color: var(--lime);
-  box-shadow: inset 0 0 0 1px #415b2b;
+  box-shadow: inset 0 0 0 1px var(--lime-border);
 }
 
 .mt-move.key {
@@ -868,7 +964,7 @@ p {
 }
 
 .mt-move.mistake .glyph {
-  color: #ff9f5a;
+  color: var(--orange);
 }
 
 .mt-move.blunder .glyph {
@@ -886,6 +982,12 @@ p {
   flex-direction: column;
   gap: 8px;
   padding: 10px;
+  overflow-y: auto;
+}
+
+/* With the game summary above it, the move list keeps at least ~7 rows; the tab scrolls instead. */
+.game-card ~ .move-table {
+  min-height: 200px;
 }
 
 .moves-actions,
@@ -896,8 +998,7 @@ p {
   gap: 6px;
 }
 
-.keys-note,
-.error-count {
+.keys-note {
   flex: none;
 }
 
@@ -926,7 +1027,7 @@ p {
   min-height: 40px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--line);
-  background: #0c0f13;
+  background: var(--surface-sunken);
 }
 
 .agent-orb {
@@ -1052,7 +1153,7 @@ p {
 }
 
 .composer input:focus {
-  border-color: #526379;
+  border-color: var(--blue-border);
 }
 
 .send {
@@ -1080,7 +1181,7 @@ p {
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: #0b0e12;
+  background: var(--surface-sunken);
 }
 
 .segmented button {
@@ -1141,7 +1242,7 @@ p {
 }
 
 .track-card.active {
-  border-color: #415b2b;
+  border-color: var(--lime-border);
   background: var(--lime-soft);
 }
 
@@ -1156,7 +1257,7 @@ p {
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #0b0e12;
+  background: var(--surface-sunken);
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
@@ -1261,12 +1362,440 @@ p {
 }
 
 .game-row.active {
-  border-color: #415b2b;
+  border-color: var(--lime-border);
   background: var(--lime-soft);
 }
 
 .game-row strong {
   font-size: 13px;
+}
+
+/* A result stripe on the left edge; the result word stays in the row, so colour is not the only cue. */
+.game-row {
+  border-left-width: 3px;
+}
+
+.game-row.win {
+  border-left-color: var(--win);
+}
+
+.game-row.loss {
+  border-left-color: var(--loss);
+}
+
+.game-row.draw {
+  border-left-color: var(--draw);
+}
+
+.game-row .variation {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* This week: one focus, seven days (Play tab) */
+
+.program-card {
+  gap: 8px;
+}
+
+.program-card > p {
+  margin: 0;
+}
+
+.day-tiles {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.day-tile {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 6px 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--muted);
+}
+
+.day-tile:hover {
+  border-color: var(--line-strong);
+}
+
+.day-tile:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 1px;
+}
+
+.day-number {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.day-kind {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.day-tile.today {
+  border-color: var(--lime-border);
+  color: var(--text);
+}
+
+.day-tile.today .day-number {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.day-tile.done .day-number {
+  background: var(--lime-soft);
+  color: var(--lime);
+}
+
+.day-tile.shown {
+  background: var(--surface-3);
+  box-shadow: inset 0 -2px 0 var(--lime);
+}
+
+.day-detail {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  font-size: 12px;
+}
+
+.day-detail > span {
+  color: var(--muted);
+}
+
+.day-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.all-drills summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.all-drills[open] summary {
+  margin-bottom: 6px;
+}
+
+/* Openings repertoire (Play tab) */
+
+.repertoire-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 2px 6px;
+}
+
+.repertoire-card {
+  gap: 6px;
+}
+
+.repertoire-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.family-list,
+.variant-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.variant-list {
+  margin: 2px 0 4px;
+}
+
+.family-row,
+.variant-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr) 34px minmax(56px, 0.8fr) 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+}
+
+.variant-row {
+  grid-template-columns: minmax(0, 1fr) 34px minmax(56px, 0.8fr) 38px;
+  padding-left: 27px;
+  color: var(--muted);
+}
+
+.family-row:hover,
+.variant-row:hover {
+  background: var(--surface-3);
+}
+
+.family-row:focus-visible,
+.variant-row:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 1px;
+}
+
+.family-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.family-row .family-name {
+  font-weight: 600;
+}
+
+.family-caret {
+  color: var(--subtle);
+  transition: transform 0.15s;
+}
+
+.open > .family-row .family-caret {
+  transform: rotate(90deg);
+  color: var(--lime);
+}
+
+.variant-row.current {
+  border-color: var(--lime-border);
+  color: var(--text);
+}
+
+.family-row .score-bar,
+.variant-row .score-bar {
+  min-width: 0;
+}
+
+/* Game summary and eval graph (Moves tab) */
+
+.game-card {
+  flex: none;
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.game-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.result-pill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.result-pill.win {
+  border-color: var(--win);
+  color: var(--text);
+  background: color-mix(in srgb, var(--win) 22%, transparent);
+}
+
+.result-pill.loss {
+  border-color: var(--loss);
+  color: var(--text);
+  background: color-mix(in srgb, var(--loss) 22%, transparent);
+}
+
+.result-pill.draw {
+  background: var(--surface-3);
+}
+
+.game-card-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.game-card-stats div {
+  padding: 5px 7px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+}
+
+.game-card-stats dt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.game-card-stats dd {
+  margin: 1px 0 0;
+  font: 700 14px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-card-note {
+  margin: 0;
+}
+
+.eval-graph {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.eval-graph-plot {
+  position: relative;
+  height: 92px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--eval-plot);
+  cursor: pointer;
+}
+
+.eval-graph-plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.eval-area.white {
+  fill: rgba(236, 239, 244, 0.6);
+}
+
+.eval-area.black {
+  fill: rgba(4, 6, 9, 0.62);
+}
+
+.eval-zero {
+  stroke: var(--subtle);
+  stroke-width: 1;
+}
+
+.eval-line {
+  fill: none;
+  stroke: var(--text);
+  stroke-opacity: 0.75;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.eval-current {
+  stroke: var(--lime);
+  stroke-width: 1.5;
+}
+
+.eval-cursor {
+  stroke: var(--text);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+
+.eval-dot,
+.eval-key {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.eval-dot {
+  background: var(--loss);
+  box-shadow: 0 0 0 2px var(--eval-plot);
+}
+
+.eval-dot.blunder {
+  width: 11px;
+  height: 11px;
+}
+
+.eval-key {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--lime);
+  box-shadow: 0 0 0 2px var(--eval-plot);
+}
+
+.eval-dot.static,
+.eval-key.static {
+  position: static;
+  display: inline-block;
+  transform: none;
+  vertical-align: -1px;
+}
+
+.eval-key.static {
+  width: 10px;
+  height: 10px;
+}
+
+.eval-tip {
+  position: absolute;
+  top: 4px;
+  z-index: 2;
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(8px);
+}
+
+.eval-tip.left {
+  transform: translateX(calc(-100% - 8px));
+}
+
+.eval-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.eval-graph-empty {
+  margin: 0;
 }
 
 .game-meta {
@@ -1348,7 +1877,7 @@ p {
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: 11px;
-  background: #0b0e12;
+  background: var(--surface-sunken);
 }
 
 .band-switch button {
@@ -1386,9 +1915,10 @@ p {
 
 .summary-strip > div {
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-glass);
+  backdrop-filter: var(--glass-blur);
 }
 
 .summary-strip strong {
@@ -1399,145 +1929,213 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
-.insight-grid {
+.recap-body {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.recap-card {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: var(--surface-glass);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow);
+}
+
+.recap-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 10px;
 }
 
-.insight-head {
-  cursor: default;
+.recap-card h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 650;
 }
 
-.card-grid {
+.recap-columns {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.stat-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-}
+/* Wins, draws and losses as one 100% bar: thin, 2px surface gaps, rounded ends */
 
-.card-grid .stat-card.expanded {
-  grid-column: 1 / -1;
-  border-color: #415b2b;
-}
-
-.card-grid .stat-card.expanded .chart {
-  height: 280px;
-}
-
-.stat-summary {
+.score-bar {
+  display: flex;
+  gap: 2px;
   width: 100%;
+  height: 10px;
+  min-width: 80px;
+}
+
+.score-bar.empty {
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+
+.score-segment {
+  flex-basis: 0;
+  min-width: 3px;
+  cursor: default;
+}
+
+.score-segment:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.score-segment:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.score-segment:only-child {
+  border-radius: 4px;
+}
+
+.score-segment:hover {
+  filter: brightness(1.2);
+}
+
+.score-segment.win,
+.score-swatch.win {
+  background: var(--win);
+}
+
+.score-segment.draw,
+.score-swatch.draw {
+  background: var(--draw);
+}
+
+.score-segment.loss,
+.score-swatch.loss {
+  background: var(--loss);
+}
+
+.score-legend {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.score-legend li {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px;
-  border: 0;
-  background: transparent;
-  text-align: left;
+  gap: 5px;
 }
 
-.stat-summary:hover {
-  background: var(--surface-2);
+.score-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
 }
 
-.stat-icon {
-  width: 34px;
-  height: 34px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: var(--lime-soft);
-  color: var(--lime);
-}
-
-.stat-text {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.stat-text strong {
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.stat-text .muted {
+.score-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 12px;
 }
 
-.stat-chevron {
-  flex: none;
+.score-table th,
+.score-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 500;
+}
+
+.score-table thead th {
   color: var(--muted);
-  transition: transform 0.2s;
+  font-size: 11px;
 }
 
-.stat-card.expanded .stat-chevron {
-  transform: rotate(90deg);
-  color: var(--lime);
+.score-table tbody th {
+  color: var(--text);
+  white-space: nowrap;
 }
 
-.stat-details {
-  padding: 4px 14px 14px;
-  border-top: 1px solid var(--line);
+.score-table .score-group th {
+  padding-top: 12px;
+  border-bottom: 0;
+  color: var(--subtle);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.chart {
-  height: 220px;
-  margin-top: 12px;
+.score-table .bar-cell {
+  width: 52%;
 }
 
-.chart.short {
-  height: 150px;
+.num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
 }
 
-.card-grid .chart {
-  height: 180px;
+.repertoire-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repertoire-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) 44px minmax(80px, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.repertoire-list li:last-child {
+  border-bottom: 0;
+}
+
+.repertoire-name {
+  display: grid;
+  min-width: 0;
+}
+
+.repertoire-name strong {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recap-note {
   margin-top: 12px;
 }
 
-.stat-table {
-  width: 100%;
-  margin-top: 10px;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.stat-table th,
-.stat-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-}
-
-.stat-table th {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.stat-table td:nth-child(n + 2),
-.stat-table th:nth-child(n + 2) {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
 /* Responsive */
 
 @media (max-width: 1180px) {
+  /* Board and side panel stay side by side: the coach composer stays in view. */
+  .play-layout {
+    grid-template-columns: minmax(0, 1fr) clamp(300px, 36vw, 380px);
+  }
+
+  .recap-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
   .app {
     height: auto;
     min-height: 100%;
@@ -1560,15 +2158,6 @@ p {
   .side-panel {
     height: min(78dvh, 720px);
   }
-
-  .card-grid,
-  .insight-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .summary-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 760px) {
@@ -1582,6 +2171,16 @@ p {
 
   .trace {
     display: none;
+  }
+
+  /* Phones: the bar needs the room more than the Elo column. */
+  .score-table th:last-child,
+  .score-table td:last-child {
+    display: none;
+  }
+
+  .recap-card-head {
+    flex-direction: column;
   }
 
   .mode-switch {

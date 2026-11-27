@@ -180,6 +180,26 @@ plies long, and the reason says how many plies it has. Drilled lines are capped
 at `TASK_PLIES` (12). The interface shows the drill length next to the board, so
 a short line is reported as short instead of silently passed off as a lesson.
 
+`GET /api/coach/program` narrows the plan to **one focus for seven days**
+(`build_program` in `chess_mcp/postgres/training_plan.py`, a pure function):
+
+- **The focus** is the highest-ranked opening or defense that has a line to
+  drill. The line is your most played variant of that family with a stored line
+  of at least 6 plies.
+- **The days:**
+  1. learn the line;
+  2. play your side of it;
+  3. find the stored engine move in your costliest repeated mistakes in that
+     family (at least 50 cp lost; up to 5 positions);
+  4. play the line, then finish against Stockfish at your average rating;
+  5. a second mistakes pass;
+  6. another game;
+  7. review the family's record.
+- With no stored mistake, days 3 and 5 drill the line again, and a note says
+  why.
+- Progress ticks stay in the browser (`localStorage`), because the databases
+  are written only by the ETL.
+
 ## Design guarantees
 
 ### Read-only agent access
@@ -409,10 +429,11 @@ Nineteen routes serve the interface, the coaching reads, and the coach:
 | `GET /api/games` | Filter games by player, type, outcome, ECO, and date |
 | `GET /api/games/{game_id}` | One game's metadata and movetext |
 | `GET /api/games/{game_id}/moves` | Paged moves and stored evaluations |
-| `GET /api/lessons/openings` | Opening lessons for a colour |
+| `GET /api/lessons/openings` | Opening lessons for a colour, with your W/D/L per line |
 | `GET /api/lessons/endgames` | Endgame lessons for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest target, calculation, four tasks |
 | `GET /api/coach/plan` | The ranked training plan |
+| `GET /api/coach/program` | One focus, seven days, built from the plan |
 | `GET /api/openings` | Opening theory for an exact normalized position |
 | `GET /api/positions` | Neo4j position context and outgoing moves |
 | `GET /api/explorer` | Book, your and your opponents' moves from a position, and your games through it |
@@ -447,10 +468,14 @@ a phone). The app has three modes:
   rank behind a larger one.
 - **Play & train** — play Stockfish at a chosen strength (matched to your
   average rating until you pick one) with a real clock, takeback, resign and
-  PGN copy, or drill the ranked plan from `GET /api/coach/plan`. Tabs: Play
-  (new game and lessons), Moves, Coach, Explorer.
-- **My games** — stored games grouped by time control. A game opens at its
-  recorded key moment; the move table marks `?!`, `?` and `??` from stored
+  PGN copy. The **This week** card shows seven day tiles for one focus from
+  `GET /api/coach/program`; the full ranked plan is under "All drills". The
+  openings are With White and With Black lists with W/D/L bars. Tabs: Play
+  (new game, week, openings), Moves, Coach, Explorer.
+- **My games** — stored games grouped by time control, each row with a result
+  stripe and the opening family. A game opens at its recorded key moment, with
+  a summary card (result, ratings, your accuracy) and an eval graph of the
+  stored evaluations; the move table marks `?!`, `?` and `??` from stored
   centipawn loss. Tabs: Games, Moves, Coach, Explorer.
 
 The Explorer tab reads graph v2 through `GET /api/explorer`: book moves, your
@@ -483,6 +508,13 @@ The coach has two modes, set by `COACH_MODE` in `.env`:
     - no other MCP servers.
   - It offers only fourteen read-only coach tools. They mirror the MCP
     contracts and run in the API process.
+  - **Three-part answers.** For the current position the coach answers with
+    *Position* (Stockfish eval, whether your games know it, the opening),
+    *Lines* (Stockfish's top 3, drawn on the board as arrows; the one played
+    most here in your games, or the book move, is tagged human; a click on a
+    line shows its whole path) and *For you* (the choice tied to your style).
+    Before answering it reads your profile from the stored games: record,
+    strongest and weakest openings, top repeated mistake.
   - **Graph context (GraphRAG).** Before Claude reads the question, one
     bounded Neo4j read collects your own record around the position: your
     moves and your opponents' moves with results and average loss, the book
@@ -630,8 +662,8 @@ Project instructions for Claude Code live in [`CLAUDE.md`](CLAUDE.md).
 Not yet built: persisting lessons or drilling history back into the stores,
 running the retrieval API as a remote HTTP or OAuth service, and automatically
 verifying every natural-language strategic claim the model produces. The
-training plan ranks what to work on next; it does not yet record whether a drill
-was completed.
+weekly program's ticks live only in the browser; nothing records a completed
+drill in the stores.
 
 ## Documentation
 

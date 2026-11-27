@@ -15,6 +15,28 @@ export type CoachMode = 'claude' | 'offline'
 export type StepState = 'running' | 'done' | 'failed'
 export type CoachTrace = Partial<Record<EvidenceSource, StepState>>
 
+/** One Stockfish candidate from the current position, tagged with how people play its first move. */
+export interface CandidateLine {
+  rank: number
+  uci: string[]
+  san: string[]
+  /** From the side to move at the root. */
+  score: { type: 'cp' | 'mate'; value: number }
+  /** Stored games (yours and your opponents') where the first move was played here. */
+  games: number
+  book: boolean
+  /** The line people actually play here: most games, else the best-ranked book line. */
+  human: boolean
+}
+
+export interface CandidateLines {
+  /** The position the lines start from. */
+  fen: string
+  root_player: 'white' | 'black'
+  depth: number | null
+  lines: CandidateLine[]
+}
+
 export interface CoachMessage {
   id: string
   role: 'user' | 'coach'
@@ -24,6 +46,8 @@ export interface CoachMessage {
   pending?: boolean
   /** UCI moves the board should play. Not shown as prose. */
   play?: string[]
+  /** Stockfish's candidate lines for a position question, drawn on the board. */
+  lines?: CandidateLines
 }
 
 export interface PlayedMove {
@@ -55,6 +79,7 @@ export type CoachEvent =
   | { type: 'tool_start'; tool: string; source: EvidenceSource }
   | { type: 'tool_end'; tool: string; source: EvidenceSource; ok: boolean }
   | { type: 'text'; text: string }
+  | ({ type: 'lines' } & Omit<CandidateLines, 'fen'>)
   | { type: 'done'; mode: CoachMode; stop_reason: string }
   | { type: 'error'; message: string }
 
@@ -63,6 +88,7 @@ export interface CoachHandlers {
   onText?: (textSoFar: string) => void
   onTrace?: (trace: CoachTrace) => void
   onMode?: (mode: CoachMode) => void
+  onLines?: (lines: CandidateLines) => void
 }
 
 export const PHASE_ORB: Record<CoachPhase, OrbState> = {
@@ -120,6 +146,7 @@ interface CacheEntry {
   question: string
   answer: string
   mode?: CoachMode
+  lines?: CandidateLines
 }
 
 interface CoachLog {
@@ -221,11 +248,12 @@ export function rememberAnswer(
   answer: string,
   mode: CoachMode,
   store: KeyValueStore | null = browserStore(),
+  lines?: CandidateLines,
 ): void {
   const log = readLog(store)
   const key = cacheKey(view, fen, question)
   const next = log.cache.filter(entry => cacheKey(entry.view, entry.fen, entry.question) !== key)
-  next.push({ view, fen: positionKey(fen), question: question.trim(), answer, mode })
+  next.push({ view, fen: positionKey(fen), question: question.trim(), answer, mode, ...(lines ? { lines } : {}) })
   log.cache = next.slice(-LOG_LIMIT)
   writeLog(store, log)
 }
@@ -292,8 +320,8 @@ async function failureFor(response: Response): Promise<string> {
   return detail || `The coach request failed (HTTP ${response.status}).`
 }
 
-function present(raw: string, mode: CoachMode, cached = false): CoachMessage {
-  return createMessage('coach', coachProse(raw), { mode, cached, play: parsePlayMoves(raw) })
+function present(raw: string, mode: CoachMode, cached = false, lines?: CandidateLines): CoachMessage {
+  return createMessage('coach', coachProse(raw), { mode, cached, play: parsePlayMoves(raw), ...(lines ? { lines } : {}) })
 }
 
 /**
@@ -308,13 +336,19 @@ export async function askCoach(
   store: KeyValueStore | null = browserStore(),
 ): Promise<CoachMessage> {
   const hit = cachedAnswer(context.mode, context.fen, question, store)
-  if (hit) return present(hit.answer, hit.mode ?? 'offline', true)
+  if (hit) {
+    // A cached answer draws its lines too, from the board as it is now.
+    const lines = hit.lines ? { ...hit.lines, fen: context.fen } : undefined
+    if (lines) handlers.onLines?.(lines)
+    return present(hit.answer, hit.mode ?? 'offline', true, lines)
+  }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   const trace: CoachTrace = {}
   let mode: CoachMode = 'offline'
   let text = ''
+  let lines: CandidateLines | undefined
   handlers.onPhase?.('composing')
 
   try {
@@ -360,6 +394,12 @@ export async function askCoach(
             handlers.onTrace?.({ ...trace })
             handlers.onPhase?.('composing')
             break
+          case 'lines': {
+            const { type: _type, ...rest } = event
+            lines = { ...rest, fen: context.fen }
+            handlers.onLines?.(lines)
+            break
+          }
           case 'text':
             text += event.text
             handlers.onText?.(coachProse(text))
@@ -375,8 +415,8 @@ export async function askCoach(
     }
     const answer = text.trim()
     if (!answer) throw new CoachUnavailableError('The coach returned an empty answer.')
-    rememberAnswer(context.mode, context.fen, question, answer, mode, store)
-    return present(answer, mode)
+    rememberAnswer(context.mode, context.fen, question, answer, mode, store, lines)
+    return present(answer, mode, false, lines)
   } catch (error) {
     if (error instanceof CoachUnavailableError) throw error
     if (error instanceof DOMException && error.name === 'AbortError') {

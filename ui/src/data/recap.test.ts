@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { busiestBand, chartLabel, clockGameCounts, loadRecap, mostPlayedLine } from './recap'
+import { busiestBand, chartLabel, clockGameCounts, loadRecap, mostPlayedLine, resultShares, topLines } from './recap'
 import type { OpeningStat, RecapBand } from './types'
 
 const italian: OpeningStat = {
@@ -82,5 +82,21 @@ describe('loadRecap', () => {
       async () => new Response(JSON.stringify({ error: 'PostgreSQL is not accepting connections.' }), { status: 503 }),
     )
     await expect(loadRecap(fetchImpl)).rejects.toThrow('PostgreSQL is not accepting connections.')
+  })
+})
+
+describe('result shares and top lines', () => {
+  it('rounds shares so they always add up to 100', () => {
+    expect(resultShares({ wins: 1, draws: 1, losses: 1 })).toEqual({ wins: 34, draws: 33, losses: 33 })
+    expect(resultShares({ wins: 2, draws: 0, losses: 1 })).toEqual({ wins: 67, draws: 0, losses: 33 })
+    expect(resultShares({ wins: 0, draws: 0, losses: 0 })).toEqual({ wins: 0, draws: 0, losses: 0 })
+    const odd = resultShares({ wins: 7, draws: 3, losses: 5 })
+    expect(odd.wins + odd.draws + odd.losses).toBe(100)
+  })
+
+  it('keeps the most played lines first, then by name', () => {
+    const line = (name: string, wins: number) => ({ name, eco: 'A00', results: { wins, draws: 0, losses: 0 } })
+    const lines = [line('B', 2), line('A', 2), line('C', 9), line('D', 1)]
+    expect(topLines(lines, 3).map(item => item.name)).toEqual(['C', 'A', 'B'])
   })
 })

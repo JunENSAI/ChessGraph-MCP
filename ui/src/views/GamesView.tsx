@@ -26,12 +26,18 @@ import { Chess } from 'chess.js'
 import type { Arrow } from 'react-chessboard'
 import { BoardStage } from '../components/BoardStage'
 import { CoachPanel } from '../components/CoachPanel'
+import { EvalGraph } from '../components/EvalGraph'
 import { ExplorerPanel } from '../components/ExplorerPanel'
+import { GameCard } from '../components/GameCard'
 import { MoveTable } from '../components/MoveTable'
 import { SidePanel } from '../components/SidePanel'
 import {
   CATEGORY_LABELS,
+  evalSeries,
+  gameStats,
   keyMomentFromMoves,
+  MATE_SWING_CP,
+  openingFamilyOf,
   loadGameMoves,
   loadGamesPage,
   loadListedGame,
@@ -47,7 +53,8 @@ import { replaySan, resultText, tryUci, type ReplayedPly } from '../lib/chess'
 import { whiteEvalFromStored } from '../lib/eval'
 import { glyphFor } from '../lib/notation'
 import { isMuted, playSound, setMuted, soundFor } from '../lib/sound'
-import { createMessage, loadThread } from '../services/coach'
+import { createMessage, loadThread, type CandidateLines } from '../services/coach'
+import { firstMoveArrows } from '../lib/lines'
 import { analyzeFen } from '../services/engine'
 
 const START_FEN = new Chess().fen()
@@ -61,8 +68,6 @@ const CATEGORY_ICONS: Record<GameCategory, LucideIcon> = {
 }
 const RESULT_LABEL = { win: 'Win', loss: 'Loss', draw: 'Draw', unfinished: 'Unfinished' }
 const ARROW = { played: '#ff7b72', best: '#b8f05a', preview: '#77a7ff' }
-/** Stored mate scores are flattened to +/-10000, so a loss this large is a swing to or from mate (as in the coach and the graph). */
-const MATE_SWING_CP = 5_000
 
 type ReviewTab = 'games' | 'moves' | 'coach' | 'explorer'
 
@@ -129,6 +134,9 @@ export function GamesView({ active }: { active: boolean }) {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [ply, setPly] = useState(0)
   const [line, setLine] = useState<{ startFen: string; moves: ReplayedPly[]; index: number } | null>(null)
+  // The coach's candidate lines for the last answer, and the one being replayed.
+  const [coachLines, setCoachLines] = useState<{ messageId: string; lines: CandidateLines } | null>(null)
+  const [activeLine, setActiveLine] = useState<{ messageId: string; rank: number } | null>(null)
   const lineToken = useRef(0)
   const [showAlternative, setShowAlternative] = useState(true)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
@@ -250,6 +258,7 @@ export function GamesView({ active }: { active: boolean }) {
     arrows.push({ startSquare: plies[ply].from, endSquare: plies[ply].to, color: ARROW.played })
     arrows.push({ startSquare: bestMove.from, endSquare: bestMove.to, color: ARROW.best })
   }
+  if (!line && coachLines && coachLines.lines.fen === fen) arrows.push(...firstMoveArrows(coachLines.lines))
   if (explorerArrow) arrows.push({ startSquare: explorerArrow.slice(0, 2), endSquare: explorerArrow.slice(2, 4), color: ARROW.preview })
 
   // Navigation works on whatever is shown: the game, or the better line.
@@ -389,12 +398,14 @@ export function GamesView({ active }: { active: boolean }) {
       ? 'Start'
       : `${Math.ceil(ply / 2)}${ply % 2 === 1 ? '.' : '…'} ${plies[ply - 1]?.san ?? ''}${glyphFor(detail?.stored[ply - 1]?.cpLoss) ?? ''}`
   const lineResult = line ? resultText(fen) : null
-  const errors = useMemo(() => {
-    if (!detail) return { mine: 0, theirs: 0 }
-    const mover = detail.userColor === 'white' ? 'w' : 'b'
-    const count = (mine: boolean) =>
-      detail.stored.filter(move => (move.mover === mover) === mine && (glyphFor(move.cpLoss) === '?' || glyphFor(move.cpLoss) === '??')).length
-    return { mine: count(true), theirs: count(false) }
+  const review = useMemo(() => {
+    if (!detail) return null
+    const other = detail.userColor === 'white' ? 'black' : 'white'
+    return {
+      mine: gameStats(detail.stored, detail.userColor),
+      theirs: gameStats(detail.stored, other),
+      series: evalSeries(detail.stored, detail.userColor),
+    }
   }, [detail])
 
   const controls = (
@@ -465,13 +476,14 @@ export function GamesView({ active }: { active: boolean }) {
                     <button
                       key={item.id}
                       type="button"
-                      className={`game-row${item.id === gameId ? ' active' : ''}`}
+                      className={`game-row ${item.result}${item.id === gameId ? ' active' : ''}`}
                       onClick={() => selectGame(item.id)}
                     >
                       <span className="game-meta">
                         {item.timeControl} · {item.playedOn}
                       </span>
-                      <strong>{item.opening}</strong>
+                      <strong>{openingFamilyOf(item.opening)}</strong>
+                      {item.opening.includes(':') && <span className="game-meta variation">{item.opening.slice(item.opening.indexOf(':') + 1).trim()}</span>}
                       <span className="game-meta">
                         vs {item.opponent} · <span className={`result ${item.result}`}>{RESULT_LABEL[item.result]}</span> as{' '}
                         {item.userColor === 'white' ? 'White' : 'Black'}
@@ -494,6 +506,20 @@ export function GamesView({ active }: { active: boolean }) {
 
   const movesTab = (
     <div className="moves-tab">
+      {game && review && (
+        <GameCard game={game} mine={review.mine} theirs={review.theirs}>
+          <EvalGraph
+            points={review.series}
+            sans={plies.map(item => item.san)}
+            current={line ? -1 : ply}
+            keyPly={game.keyMoment?.ply ?? null}
+            onSelect={next => {
+              setLine(null)
+              setPly(next)
+            }}
+          />
+        </GameCard>
+      )}
       <div className="key-card">
         <div>
           <span className="eyebrow">Key moment</span>
@@ -539,11 +565,6 @@ export function GamesView({ active }: { active: boolean }) {
           </button>
         </div>
       </div>
-      {game && (
-        <p className="muted small error-count">
-          Mistakes and blunders (100 cp or more): you {errors.mine} · opponent {errors.theirs}
-        </p>
-      )}
       {line ? (
         <>
           <p className="line-note">
@@ -580,15 +601,31 @@ export function GamesView({ active }: { active: boolean }) {
       trace={coach.trace}
       mode={coach.mode}
       prompts={['Why was this a mistake?', 'Why did I lose?', 'What should I play here?']}
+      activeLine={line ? activeLine : null}
+      onLine={(message, picked) => {
+        if (!message.lines) return
+        setCoachLines({ messageId: message.id, lines: message.lines })
+        setActiveLine({ messageId: message.id, rank: picked.rank })
+        void showLine(message.lines.fen, picked.uci)
+      }}
       onAsk={question => {
         const fromFen = fen
         void coach
-          .ask(question, {
-            mode: 'review',
-            fen: fromFen,
-            summary: game ? `${game.opening}, ${moveLabel}` : 'game',
-            gameId: game?.id,
-          })
+          .ask(
+            question,
+            {
+              mode: 'review',
+              fen: fromFen,
+              summary: game ? `${game.opening}, ${moveLabel}` : 'game',
+              gameId: game?.id,
+            },
+            {
+              onLines: (lines, messageId) => {
+                setCoachLines({ messageId, lines })
+                setActiveLine(null)
+              },
+            },
+          )
           .then(reply => {
             const fix = correction()
             if (wantsBoardLine(question) && fix) {
@@ -596,6 +633,7 @@ export function GamesView({ active }: { active: boolean }) {
               void playContinuation(fix.fen, [fix.uci])
               return
             }
+            if (reply?.lines) return // the chips replay a line on demand
             const seed = reply?.play ?? []
             if (seed.length > 0) void showLine(fromFen, seed)
           })

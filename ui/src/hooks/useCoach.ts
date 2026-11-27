@@ -7,6 +7,7 @@ import {
   loadThread,
   saveThread,
   type CoachContext,
+  type CandidateLines,
   type CoachMessage,
   type CoachMode,
   type CoachPhase,
@@ -38,7 +39,11 @@ export function useCoach(view: CoachView, initial: CoachMessage[] = []) {
     setMessages(next)
   }, [])
 
-  const ask = useCallback(async (question: string, context: CoachContext, options?: { silent?: boolean }) => {
+  const ask = useCallback(async (
+    question: string,
+    context: CoachContext,
+    options?: { silent?: boolean; onLines?: (lines: CandidateLines, messageId: string) => void },
+  ) => {
     const run = ++generation.current
     const live = () => run === generation.current
     const history = context.history ?? historyFrom(latest.current)
@@ -56,20 +61,29 @@ export function useCoach(view: CoachView, initial: CoachMessage[] = []) {
           : current.filter(message => message.id !== pending.id),
       )
 
+    let streamed: CoachMessage = pending
     try {
       const reply = await askCoach(question, { ...context, history }, {
         onPhase: next => live() && setPhase(next),
         onTrace: next => live() && setTrace(next),
         onMode: next => live() && setMode(next),
         onText: text => {
-          if (live()) replacePending({ ...pending, text })
+          streamed = { ...streamed, text }
+          if (live()) replacePending(streamed)
+        },
+        onLines: lines => {
+          streamed = { ...streamed, lines }
+          if (!live()) return
+          replacePending(streamed)
+          options?.onLines?.(lines, pending.id)
         },
       })
       if (live()) {
         if (reply.mode) setMode(reply.mode)
-        replacePending(reply)
+        // Keep the pending id, so a line the board already shows stays tied to its chips.
+        replacePending({ ...reply, id: pending.id })
       }
-      return reply
+      return { ...reply, id: pending.id }
     } catch (error) {
       if (!live()) return undefined
       const text =

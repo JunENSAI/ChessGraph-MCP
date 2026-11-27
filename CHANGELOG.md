@@ -858,3 +858,411 @@ A code review of the pull request found these. All are in
 New and changed tests in `tests/test_coach.py`: the session options blank the
 key, the turn cap ends with the notice before `done`, and text from two
 messages is joined with a blank line.
+
+## Batch 9: three-part coach answers with 3 candidate lines
+
+Branch `feat/coach-lines-ui`.
+
+### Why
+
+For the current position, Junior wants a brief answer in three parts:
+
+1. the Stockfish eval, whether the position is known from his games, and the
+   opening;
+2. three possible lines shown on the board, ranked by Stockfish, with the one
+   people actually play marked;
+3. advice framed by his own games, read before the coach answers.
+
+### Changed
+
+- **Evidence is fetched before Claude reads the question, in the CLAUDE.md
+  order.** The order is the player profile, then the graph context, then the
+  lines (`ClaudeProvider.gather`). Each step lights its own chip.
+  - **Player profile** (`style_profile`, PostgreSQL): record, strongest and
+    weakest opening families, and the top repeated mistake. It is redacted and
+    cached for 10 minutes per player.
+  - **Graph context** (Neo4j): as in batch 7. `read_style_context` now reads it
+    once, and the same result feeds the lines.
+  - **Candidate lines** (`candidate_lines`, Stockfish): one MultiPV 3 search.
+    - `rank_lines` tags each line with `games`: how often its first move was
+      played here in your games and your opponents' games.
+    - It also tags each line with `book`.
+    - `human` marks the most played line; with no games, the best-ranked book
+      line; otherwise no line.
+- **A new SSE event, `lines`**, carries `root_player`, `depth` and the 3 lines
+  (`rank`, `uci`, `san`, `score`, `games`, `book`, `human`). It is sent before
+  any text, so the board shows the lines while the answer streams.
+- **The prompt carries three blocks**: Player profile, Graph context and
+  Candidate lines, each as compact JSON. The answer shape for a position
+  question is now:
+  - **Position:** eval and depth, known (games, W/D/L) or new, and the opening.
+  - **Lines:** the 3 lines, with the human one marked.
+  - **For you:** one or two sentences.
+
+  There is no `PLAY:` line for position questions. Game and training answers
+  keep it.
+- **Offline mode** reads the graph first, then runs a MultiPV 3 search. It sends
+  the same `lines` event and writes the same three parts.
+- **UI:**
+  - **Coach answers:** the coach service parses `lines`, and `useCoach` passes
+    them on while the answer streams. Answers are cached with their lines.
+  - **Line chips:** `CoachPanel` shows a chip per line (rank, SAN, eval from
+    White, and a "human" tag explained in its tooltip).
+  - **Board:** Play & train draws the 3 first moves in rank colours (lime,
+    blue, amber). A chip click draws that line's whole path, fading move by
+    move. In game review, a chip replays the line on the board.
+  - **Shared helpers:** in `ui/src/lib/lines.ts`.
+- **Docs:**
+  - `CLAUDE.md`: the Answers rule and the in-app evidence order.
+  - `plugins/chessgraph/agents/chess-coach.md`: the answer shape.
+  - The `explain-position` skill: games and graph first, then MultiPV 3, then
+    three parts.
+  - `backend/README.md`: the `lines` event.
+  - `README.md`: the coach section.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 186 passed, 7 skipped |
+| `cd ui && npm test` | 99 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npx tsc -b` | no errors |
+| `claude plugin validate plugins/chessgraph` | passed |
+| `curl -N POST /api/coach/chat` after 1.d4 (live stores, your login) | profile (postgres) → style context (neo4j) → analyze (stockfish) → `lines` → text → `done` in 8.2 s. The lines were 1...d5 (−8, book, 1,166 games, human), 1...Nf6 (−10, book, 338 games) and 1...f5 (−52, book). The answer came in the three parts |
+| Account-name scan of that stream | no match |
+
+In the browser (1440×900, Play & train, Coach tab), "What should I play here?"
+showed three arrows (e4 lime, Nf3 blue, d4 amber) and three chips, with d4
+tagged human. Clicking chip 3 drew the d4 c5 c4 path.
+
+New tests:
+
+- `tests/test_coach.py`:
+  - the fetch order and the `lines` event;
+  - the three prompt blocks, in order, with no account name;
+  - human tagging by games, then book, then none;
+  - lines skipped when Stockfish fails, and no human tag when Neo4j is down;
+  - the 10-minute profile cache;
+  - a played-move explanation skips all three fetches;
+  - a profile is `None` when PostgreSQL fails;
+  - offline writes the three parts and sends `lines`.
+- `ui/src/lib/lines.test.ts`: colours, first-move arrows, a fading path that
+  stops at an illegal move, eval labels including mate, and the human reason.
+- `ui/src/services/coach.test.ts`: `lines` is streamed, attached and cached.
+
+## Batch 10: refined dark design, Home recap, layout that fits
+
+### Why
+
+- The Home page repeated its headers ("Games in band" and "Most played clock"
+  appeared twice) and left empty bands under short charts.
+- The app had no gradient and many hard-coded colours.
+- At 1024×768 the coach box sat below the fold, because the layout dropped to
+  one column at 1180px.
+
+### Changed
+
+- `ui/src/index.css`:
+  - New tokens for the refined dark look:
+    - a deep-green to slate gradient behind the page (`--bg-gradient`);
+    - glass cards (`--surface-glass`, `--glass-border`, `--glass-blur`) on the
+      top bar, panels, KPI tiles and recap cards;
+    - `--surface-sunken`, plus border and soft tokens for lime, blue and red.
+  - The hard-coded hex values are now these tokens. Board square colours stay
+    as they are.
+- **Chart palette:**
+  - Win, draw and loss form a diverging scale: `--win #199e70`,
+    `--draw #4a505b` (neutral midpoint) and `--loss #d95926`.
+  - `scripts/validate_palette.js` from the dataviz skill checked it on the dark
+    surface:
+    - the win/loss poles pass every check;
+    - the three colours pass colour-blind separation (worst adjacent ΔE 16.0)
+      and the normal-vision floor (23.3);
+    - the grey midpoint fails the lightness and chroma checks, as a neutral
+      midpoint does by design.
+  - The earlier lime/red pair failed for deuteranopia (ΔE 3.3).
+  - `ui/src/lib/palette.ts` holds the same values for code that cannot read CSS
+    variables.
+- `ui/src/components/ScoreBar.tsx`: one W/D/L 100% bar with 2px gaps, rounded
+  ends, a hover count per segment and a screen-reader label, plus
+  `ScoreLegend`. Batch 11 reuses it.
+- **Home (`ui/src/views/RecapView.tsx`), rebuilt:**
+  - The KPI strip stays.
+  - **Results:** a single table with a W/D/L bar per row, by colour and by time
+    control, with games, win % and average opponent Elo. It replaces the 5
+    duplicated charts.
+  - **Repertoire · White** and **Repertoire · Black** side by side: the top 6
+    lines, each with a short label (`chartLabel`), its family when the line is
+    a variation, the games, a bar and the win %.
+  - The cards size to their content.
+  - Home no longer uses Recharts, and `StatCard.tsx` (now unused) is removed.
+- `ui/src/data/recap.ts`: `resultShares` (whole-number shares that sum to 100)
+  and `topLines`.
+- **Layout:**
+  - The board and the side panel stay side by side down to 900px (side panel
+    `clamp(300px, 36vw, 380px)`). The layout switches to one column only below
+    900px.
+  - On phones the Elo column is hidden.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `cd ui && npm test` | 101 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npm run build` | built |
+| `uv run pytest` | 186 passed, 7 skipped (no backend change) |
+
+In the browser:
+
+- **1440×900:** Home shows the KPI strip, the results table (By colour, then
+  Bullet 861, Blitz 488, Bot 66, Rapid 4 in the 2000+ band) and the two
+  repertoire cards, with no empty bands.
+- **1024×768:** Play & train keeps the board and the Coach tab side by side.
+  The composer sits at 703–741px of 768, and the page does not scroll.
+- **375×812:** no horizontal scroll (scroll width 375).
+
+New tests in `ui/src/data/recap.test.ts`: shares that sum to 100 (thirds, a
+zero row, odd counts) and the order of the top lines.
+
+## Batch 11: games and openings presentation
+
+### Why
+
+- An opened game showed only its moves. You had to read the whole list to see
+  how it went.
+- The openings were two native drop-downs with game counts and no results.
+
+### Changed
+
+- **Opening a game (My games → Moves tab):**
+  - `ui/src/components/GameCard.tsx`, a new summary card:
+    - the result, your colour and both ratings;
+    - your average centipawn loss, inaccuracies (50–99 cp), mistakes
+      (100–299) and blunders (300+). The thresholds are those of the move
+      glyphs;
+    - the opponent's counts on one line.
+    - Swings to or from mate (stored as ±10000) stay out of the average and
+      are named in the tooltip.
+  - `ui/src/components/EvalGraph.tsx`, a new SVG eval graph:
+    - the stored `eval_cp_after` after every ply, from White's side, clamped
+      at ±5 pawns like the eval bar;
+    - White's area is light above the middle line and Black's dark below it;
+    - dots mark your mistakes and blunders (blunders larger), and a lime ring
+      marks the key moment;
+    - hovering shows the move, the eval and the cp loss; a click jumps the
+      board to that ply.
+  - The Moves tab now scrolls as a whole, so the move list keeps at least
+    200px under the card.
+- **Game list rows:** a result stripe on the left edge (win, draw, loss
+  palette). The result word stays, so colour is not the only cue. The row now
+  shows the opening family, with the variation on its own line.
+- **Openings (Play & train → Play tab):**
+  - `ui/src/components/RepertoireList.tsx` replaces the two selects. It has a
+    **With White** list and a **With Black** list, each family showing its
+    games, a W/D/L bar and the win %.
+  - Clicking a family drills its most played line and opens its variants.
+    Each variant has its own bar and can be drilled.
+  - When two stored names shorten to the same label, the ECO code is added.
+    For example, the London against 1…d5 is "Main line · D02" and against
+    1…Nf6 it is "Main line · A48".
+- **Backend:**
+  - `list_opening_lessons` (`chess_mcp/postgres/repository.py`) now returns
+    `wins`, `draws` and `losses` from the player's side. It is still one
+    bound, read-only query.
+  - `OpeningLesson` gained the three fields, defaulting to 0.
+- **Explorer:** "Your games here" gains the same W/D/L bar.
+- **Removed:** Recharts (no chart used it any more) and `ui/src/lib/palette.ts`
+  (nothing imported it). The colours stay as CSS tokens. The new
+  `--eval-plot` token holds the graph's mid-grey plot.
+
+### Fixed during the batch
+
+- The first version of the W/D/L SQL compared the `game_result` enum to a
+  `CASE` text value. PostgreSQL rejected it (`operator does not exist:
+  game_result = text`) and the route answered 503. The fake-engine unit test
+  could not see this.
+  - **Fix:** the query uses `result::text`.
+  - **New integration test:**
+    `test_opening_lessons_count_results_from_the_player_side`. It runs the
+    query on the real database for both colours and checks that
+    W + D + L ≤ games.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 186 passed, 8 skipped |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 8 passed |
+| `cd ui && npm test` | 108 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npx tsc -b && npm run build` | built |
+
+New tests:
+
+- `ui/src/data/games.test.ts`:
+  - eval series: White's side, clamping, mate, gaps, whose move;
+  - game stats: severity bands, the mate swing left out, no average without
+    evaluated moves;
+  - the opening family.
+- `ui/src/data/openings.test.ts`: family W/D/L sums, the win share, ECO labels
+  for duplicates.
+- `tests/test_postgres_repository.py`: the W/D/L columns are in the bound query.
+- `tests/test_backend_api.py`: the route returns them.
+
+Live data (white): London System with e6, 320 games, 179 W, 28 D, 113 L.
+
+In the browser:
+
+- **1440×900:** the With White and With Black lists render with bars.
+- **A lost game opened:** the card shows 3 mistakes and 1 blunder, matching the
+  4 dots on the graph, plus the key moment ring. Hovering showed
+  "12… Bf5 -0.6 · 3 cp loss", and a click moved the board to 12… Bf5.
+- **1024×640:** the card, key moment and move list fit, and the tab scrolls.
+- **375×812:** no horizontal scroll on either view.
+
+## Batch 12: one focus, a 7-day program
+
+### Why
+
+The Play tab listed six ranked drills with no order to follow. In the live
+data, all six were also marked not ready: the family's first stored theory
+line is the bare opening (for example "Caro-Kann Defense", 2 plies), under the
+6 plies a drill needs.
+
+### Changed
+
+- **`chess_mcp/postgres/training_plan.py` → `build_program(plan, *, lines,
+  split_rows, average_rating)`**, a pure function, with the models
+  `TrainingProgram`, `ProgramDay` and `ProgramPosition`:
+  - **The focus** is the highest-ranked opening or defense with a line to
+    drill. The line is your most played variant of that family with a stored
+    line of at least `MIN_DRILL_PLIES`; the plan item's own line is the
+    fallback. So the plan's weakest family is kept, and its drill uses a line
+    you actually play (live: Caro-Kann Defense: Main Line, as Black).
+  - **The seven days:**
+    1. learn (watch the line);
+    2. drill (play your side);
+    3. fix: the family's repeated moves with you to move that lose at least
+       50 cp (`SEVERITY_MIN_CP["inaccuracy"]`), costliest first (times × average
+       loss), at most 5, each with the stored engine move;
+    4. play the line, then Stockfish at your rounded average rating;
+    5. fix again, without the hint;
+    6. play again;
+    7. review, quoting the family's stored record and the plan goal.
+  - With no stored mistake, days 3 and 5 drill the line again, and a note says
+    so. With no drillable line at all, the program is empty and a note says
+    why.
+- `PostgresRepository.get_training_program(player)` reads:
+  - the brief's rows;
+  - the plan ranking;
+  - your opening lessons for both colours;
+  - your average rating.
+
+  All of these are existing read-only queries.
+- The new route `GET /api/coach/program` is read-only.
+- **UI (Play & train → Play tab):** the "This week · <focus>" card:
+  - **Seven day tiles.** Today, the first day not ticked, is lime. Done days
+    show a tick.
+  - **Day detail** with Start and Mark done:
+    - Start reuses the existing lesson sessions: watch, drill, a one-move
+      lesson per mistake position with "Next position (n of 5)", and the line
+      followed by Stockfish.
+    - The play days set the strength to the level nearest your average rating
+      (1836 → 1800).
+  - **Progress** lives in `localStorage` (`chessgraph-program`) and is keyed by
+    focus, line and colour, so a new focus starts a new week. Every read and
+    write is wrapped, so blocked storage only loses the ticks. The stores stay
+    read-only.
+  - The full ranked plan moved under a collapsed "All drills".
+- **Docs:** `README.md` (the program, the routes, the UI tour) and
+  `backend/README.md` (the route).
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 192 passed, 9 skipped |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 9 passed |
+| `cd ui && npm test` | 111 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npx tsc -b && npm run build` | built |
+
+New tests:
+
+- `tests/test_training_plan.py`:
+  - seven days on the top family with its most played long line;
+  - the opponent Elo from the average rating;
+  - the mistake filter (an inaccuracy or worse, your side to move, the same
+    family, the costlier duplicate kept);
+  - drilling again without mistakes;
+  - the fallback to the next family;
+  - the empty program.
+- `tests/test_backend_api.py`: the route reads the configured player.
+- `tests/test_integration.py`: on the real stores, seven days or an
+  explanation. Every stored best move is legal in its position.
+- `ui/src/data/plan.test.ts`: today's day, ticks saved per program and dropped
+  when the focus changes, and broken or blocked storage.
+
+Live (Caro-Kann, as Black), the day 3 positions were Bg6 (6 times, 121 cp),
+Bg6 (5 times, 109 cp), Nf6 (6 times, 68 cp), Nf6 (4 times, 97 cp) and gxf6
+(6 times, 57 cp).
+
+In the browser:
+
+- **1024×640:**
+  - seven tiles, labelled Learn, Drill, Fix, Play, Fix, Play and Review;
+  - Start on day 3 loaded "Move 1 of 1 · Black to move", and the coach said
+    "You played Bg6 here 5 times, losing 109 cp on average" for position 2;
+  - ticking days 1 and 3 moved today to day 2 and survived a reload;
+  - Start on day 4 set Stockfish to 1800.
+- **375×812:** no horizontal scroll.
+- The test ticks were cleared from the preview browser afterwards.
+
+## Review fixes for pull request 4
+
+### Fixed
+
+- **Play days could stall.** When a scripted line ended on the opponent's
+  move, `playScripted` asked Stockfish to reply at once, so it played your move
+  for you. The board then waited for a side nobody played. The live Caro-Kann
+  line ends on White's move, so days 4 and 6 hit this. Now Stockfish only
+  replies when the side to move is not yours. Otherwise the coach tells you it
+  is your move (`ui/src/views/TrainingView.tsx`).
+- **Cached coach answers drew no arrows.** `askCoach` returned a cached answer
+  with its lines but never called `onLines`, so the board kept no arrows, or
+  the previous answer's arrows. It now calls `onLines` with the lines rebased
+  on the current board (`ui/src/services/coach.ts`).
+- **`graph_context` is guarded again.** A style context the summary cannot read
+  now returns None, meaning the graph evidence is missing. Before this fix it
+  failed the whole answer, a guard that batch 9's refactor had dropped
+  (`backend/coach/tools.py`).
+- **Play days keep your strength.** They no longer replace the strength chosen
+  on the new-game card. Unless you picked one, that level is already the one
+  for your average rating.
+- **Dead code removed.** The review-day branch in `startDay` was unreachable.
+
+### Left as is
+
+- Offline mode tags the human line from your own moves only. Claude mode also
+  counts your opponents' moves. Matching them needs one more graph read in
+  offline mode.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 193 passed, 9 skipped |
+| `cd ui && npx tsc -b && npm test` | 111 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npm run build` | built |
+
+New tests:
+
+- `tests/test_coach.py`: an unreadable context is missing evidence.
+- `ui/src/services/coach.test.ts`: a cached answer replays its lines through
+  `onLines`.
+
+The play-day fix lives inside the board component, which has no component test
+in this project. It was not checked in the browser in this pass.

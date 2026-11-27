@@ -1,4 +1,5 @@
 import type { OpeningLesson } from './lessons'
+import type { OutcomeCounts } from './types'
 
 export interface OpeningVariant {
   lesson: OpeningLesson
@@ -8,7 +9,15 @@ export interface OpeningVariant {
 export interface OpeningFamily {
   name: string
   games: number
+  /** Results summed over the variants, from the user's side. */
+  results: OutcomeCounts
   variants: OpeningVariant[]
+}
+
+/** Win share in whole percent, or null without decided or drawn games. */
+export function winPercent(results: OutcomeCounts): number | null {
+  const total = results.wins + results.draws + results.losses
+  return total ? Math.round((results.wins / total) * 100) : null
 }
 
 const PIECE_WORDS: Record<string, [string, string]> = {
@@ -52,9 +61,17 @@ export function groupOpenings(lessons: OpeningLesson[], limit = 5): OpeningFamil
     const existing = grouped.get(key)
     const entry: OpeningVariant = { lesson, label: variant }
     if (!existing) {
-      grouped.set(key, { name: family, games: lesson.games, variants: [entry] })
+      grouped.set(key, {
+        name: family,
+        games: lesson.games,
+        results: { wins: lesson.wins, draws: lesson.draws, losses: lesson.losses },
+        variants: [entry],
+      })
     } else {
       existing.games += lesson.games
+      existing.results.wins += lesson.wins
+      existing.results.draws += lesson.draws
+      existing.results.losses += lesson.losses
       existing.variants.push(entry)
     }
   }
@@ -62,6 +79,12 @@ export function groupOpenings(lessons: OpeningLesson[], limit = 5): OpeningFamil
   families.sort((a, b) => b.games - a.games || a.name.localeCompare(b.name))
   for (const family of families) {
     family.variants.sort((a, b) => b.lesson.games - a.lesson.games || a.label.localeCompare(b.label))
+    // Two stored names can shorten to one label (London vs 1...d5 and vs 1...Nf6): add the ECO code.
+    const seen = new Map<string, number>()
+    for (const entry of family.variants) seen.set(entry.label, (seen.get(entry.label) ?? 0) + 1)
+    for (const entry of family.variants) {
+      if ((seen.get(entry.label) ?? 0) > 1) entry.label = `${entry.label} · ${entry.lesson.ecoCode ?? entry.lesson.openingName}`
+    }
   }
   return families.slice(0, limit)
 }

@@ -3,6 +3,7 @@ import { Chess, type Square } from 'chess.js'
 import {
   ArrowUpDown,
   BookOpen,
+  Check,
   ChevronLeft,
   ChevronRight,
   ClipboardCopy,
@@ -41,7 +42,22 @@ import {
   type TrainingTask,
 } from '../data/lessons'
 import { endgameTitle, groupOpenings, openingFamilyName } from '../data/openings'
-import { loadTrainingPlan, orderPlan, planSummary, type PlanItem, type TrainingPlan } from '../data/plan'
+import { RepertoireList } from '../components/RepertoireList'
+import { ScoreLegend } from '../components/ScoreBar'
+import {
+  loadProgress,
+  loadTrainingPlan,
+  loadTrainingProgram,
+  nextDay,
+  orderPlan,
+  planSummary,
+  saveProgress,
+  toggleDay,
+  type PlanItem,
+  type ProgramDay,
+  type TrainingPlan,
+  type TrainingProgram,
+} from '../data/plan'
 import type { Color } from '../data/types'
 import { useBoardKeys } from '../hooks/useBoardKeys'
 import { useChessClock } from '../hooks/useChessClock'
@@ -54,7 +70,8 @@ import { TIME_CONTROLS } from '../lib/clock'
 import { buildPgn } from '../lib/notation'
 import { isMuted, playSound, setMuted, soundFor } from '../lib/sound'
 import { DEFAULT_STRENGTH, levelForRating, moveTimeMs, STRENGTH_LEVELS, strengthById } from '../lib/strength'
-import { createMessage, loadThread } from '../services/coach'
+import { createMessage, loadThread, type CandidateLines } from '../services/coach'
+import { firstMoveArrows, pathArrows } from '../lib/lines'
 import { analyzeFen, EngineError, playEngineMove } from '../services/engine'
 
 const START_FEN = new Chess().fen()
@@ -106,7 +123,13 @@ export function TrainingView({ active = true }: { active?: boolean }) {
   const [endgameId, setEndgameId] = useState('')
   const [playColor, setPlayColor] = useState<Color>('white')
   const [strengthId, setStrengthId] = useState<string | null>(null)
-  const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play' | 'course'>('opening')
+  const [activeKind, setActiveKind] = useState<'opening' | 'defense' | 'endgame' | 'play' | 'course' | 'program'>('opening')
+  // The week's program, this viewer's ticks, the day shown and the mistake position on the board.
+  const [program, setProgram] = useState<TrainingProgram | null>(null)
+  const [programStatus, setProgramStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [programDone, setProgramDone] = useState<number[]>([])
+  const [programDay, setProgramDay] = useState<number | null>(null)
+  const [programPosition, setProgramPosition] = useState<{ day: number; index: number } | null>(null)
   const [plan, setPlan] = useState<TrainingPlan | null>(null)
   const [planStatus, setPlanStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [watching, setWatching] = useState(false)
@@ -124,6 +147,9 @@ export function TrainingView({ active = true }: { active?: boolean }) {
   const [preview, setPreview] = useState<{ fen: string; evaluation: WhiteEval } | null>(null)
   const [lastEngine, setLastEngine] = useState<{ fen: string; san: string; evalText: string | null } | null>(null)
   const [coachLine, setCoachLine] = useState<{ fen: string; moves: string[] } | null>(null)
+  // The coach's candidate lines for one answer, and the one picked to show its whole path.
+  const [coachLines, setCoachLines] = useState<{ messageId: string; lines: CandidateLines } | null>(null)
+  const [activeLine, setActiveLine] = useState<{ messageId: string; rank: number } | null>(null)
   const [explorerArrow, setExplorerArrow] = useState<string | null>(null)
   const [mistakes, setMistakes] = useState(0)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
@@ -274,8 +300,11 @@ export function TrainingView({ active = true }: { active?: boolean }) {
       setStep(next)
       setOpponentThinking(false)
       if (next === lesson.line.length && lesson.engineAfter) {
+        // The line ended on the opponent's move: Stockfish takes the opponent's side from here,
+        // so it replies only after your move (handleMove), never in your place.
         setAgainstEngine(true)
-        engineReply(applied.fen)
+        if (sideToMove(applied.fen) !== (lesson.userColor === 'white' ? 'w' : 'b')) engineReply(applied.fen)
+        else coach.say('The line is over. Your move: Stockfish plays the other side from here.')
       } else if (next === lesson.line.length) {
         coach.say('Lesson complete. Choose it again to drill the line.')
       }
@@ -363,6 +392,18 @@ export function TrainingView({ active = true }: { active?: boolean }) {
         setPlan(null)
         setPlanStatus('error')
       })
+    loadTrainingProgram()
+      .then(next => {
+        if (!live) return
+        const done = loadProgress(next)
+        setProgram(next)
+        setProgramDone(done)
+        setProgramDay(nextDay(next, done) ?? next.days.at(-1)?.day ?? null)
+        setProgramStatus('ready')
+      })
+      .catch(() => {
+        if (live) setProgramStatus('error')
+      })
     Promise.all([loadOpeningLessons('white'), loadOpeningLessons('black'), loadEndgameLessons()])
       .then(([white, black, endgame]) => {
         if (!live) return
@@ -419,7 +460,12 @@ export function TrainingView({ active = true }: { active?: boolean }) {
     if (explorerArrow) {
       list.push({ startSquare: explorerArrow.slice(0, 2), endSquare: explorerArrow.slice(2, 4), color: '#77a7ff' })
     }
-    if (coachLine && coachLine.fen === displayFen) {
+    if (coachLines && coachLines.lines.fen === displayFen) {
+      const picked = activeLine?.messageId === coachLines.messageId
+        ? coachLines.lines.lines.find(line => line.rank === activeLine.rank)
+        : undefined
+      list.push(...(picked ? pathArrows(coachLines.lines.fen, picked) : firstMoveArrows(coachLines.lines)))
+    } else if (coachLine && coachLine.fen === displayFen) {
       let position = coachLine.fen
       coachLine.moves.slice(0, 2).forEach((uci, index) => {
         const applied = tryUci(position, uci)
@@ -434,7 +480,7 @@ export function TrainingView({ active = true }: { active?: boolean }) {
     const applied = tryMoveSan(fen, expected.san)
     if (applied) list.push({ startSquare: applied.from, endSquare: applied.to, color: '#bb9af7' })
     return list
-  }, [explorerArrow, coachLine, displayFen, showHint, browsing, engineHint, expected, interactive, fen])
+  }, [explorerArrow, coachLines, activeLine, coachLine, displayFen, showHint, browsing, engineHint, expected, interactive, fen])
 
   const requestEngineHint = async () => {
     if (showHint) {
@@ -526,8 +572,6 @@ export function TrainingView({ active = true }: { active?: boolean }) {
 
   const openingFamilies = useMemo(() => groupOpenings(openings), [openings])
   const defenseFamilies = useMemo(() => groupOpenings(defenses), [defenses])
-  const openingVariants = openingFamilies.find(item => item.name === openingFamily)?.variants ?? []
-  const defenseVariants = defenseFamilies.find(item => item.name === defenseFamily)?.variants ?? []
 
   const startEndgame = async (task: TrainingTask) => {
     const base = sessionFromTask(task)
@@ -580,6 +624,58 @@ export function TrainingView({ active = true }: { active?: boolean }) {
 
   /** The plan item's reason starts with its family, so the family is the text before the first colon. */
   const planFamily = (entry: PlanItem) => entry.reason.split(':')[0].trim()
+
+  const dayTask = (day: ProgramDay, kind: TrainingTask['kind'], over: Partial<TrainingTask> = {}): TrainingTask => ({
+    kind,
+    title: program?.title ?? day.title,
+    reason: day.goal,
+    start_fen: day.start_fen,
+    uci_line: day.uci_line,
+    pgn_line: '',
+    user_color: day.user_color,
+    ready: true,
+    puzzle_fens: [],
+    ...over,
+  })
+
+  const startMistake = (day: ProgramDay, index: number) => {
+    const position = day.positions[index]
+    if (!position) return
+    setProgramPosition({ day: day.day, index })
+    loadSession(
+      sessionFromTask(dayTask(day, 'puzzle', { start_fen: position.fen, uci_line: position.best_uci, title: `${day.title} · ${index + 1} of ${day.positions.length}` })),
+      true,
+    )
+    const hint = day.day === 3 ? ` You played ${position.played_san} here ${position.times} times, losing ${position.average_cp_loss} cp on average.` : ''
+    coach.say(`Position ${index + 1} of ${day.positions.length}.${hint} Find the stored engine move.`)
+  }
+
+  const startDay = (day: ProgramDay) => {
+    setActiveKind('program')
+    setProgramDay(day.day)
+    setProgramPosition(null)
+    if (day.kind === 'learn') {
+      loadSession(sessionFromTask(dayTask(day, 'opening')), true)
+    } else if (day.kind === 'drill') {
+      loadSession({ ...sessionFromTask(dayTask(day, 'opening')), watch: false }, true)
+    } else if (day.kind === 'mistakes') {
+      startMistake(day, 0)
+    } else if (day.kind === 'play') {
+      // Stockfish keeps the strength on the new-game card. Unless you picked one there, that is
+      // already the level for your average rating, which is the program's opponent_elo.
+      loadSession({ ...sessionFromTask(dayTask(day, 'opening')), watch: false, engineAfter: true }, true)
+      setTab('moves')
+    }
+    // The review day has no board session; its tile shows the goal and Mark done.
+  }
+
+  const tickDay = (day: number) => {
+    if (!program) return
+    const done = toggleDay(programDone, day)
+    setProgramDone(done)
+    saveProgress(program, done)
+    if (!programDone.includes(day)) setProgramDay(nextDay(program, done) ?? day)
+  }
 
   const startPlanItem = (entry: PlanItem) => {
     setActiveKind('course')
@@ -882,55 +978,121 @@ export function TrainingView({ active = true }: { active?: boolean }) {
         </span>
       </article>
 
-      <article className={`track-card${activeKind === 'course' ? ' active' : ''}`}>
-        <span className="eyebrow">Your training plan</span>
-        {planStatus === 'ready' && plan ? (
+      <article className={`track-card program-card${activeKind === 'program' ? ' active' : ''}`}>
+        <span className="eyebrow">This week{program?.focus ? ` · ${program.focus}` : ''}</span>
+        {programStatus === 'ready' && program && program.days.length > 0 ? (
           <>
-            <p className="muted small">{planSummary(plan)}</p>
-            {orderPlan(plan.items).map(entry => (
-              <button
-                key={`${entry.kind}:${entry.title}`}
-                type="button"
-                className="btn task-choice"
-                disabled={!entry.ready}
-                onClick={() => startPlanItem(entry)}
-              >
-                {entry.title}
-                <span>{entry.reason}</span>
-                <span className="muted small">Goal: {entry.goal}</span>
-              </button>
-            ))}
+            <p className="muted small">
+              {program.title} · you play {program.user_color === 'white' ? 'White' : 'Black'} · {programDone.length} of {program.days.length} done
+            </p>
+            <ol className="day-tiles" aria-label="Seven days">
+              {program.days.map(day => {
+                const done = programDone.includes(day.day)
+                const today = day.day === nextDay(program, programDone)
+                return (
+                  <li key={day.day}>
+                    <button
+                      type="button"
+                      className={`day-tile${done ? ' done' : ''}${today ? ' today' : ''}${day.day === programDay ? ' shown' : ''}`}
+                      aria-current={today ? 'step' : undefined}
+                      aria-label={`Day ${day.day}: ${day.title}${done ? ', done' : ''}`}
+                      onClick={() => setProgramDay(day.day)}
+                    >
+                      <span className="day-number">{done ? <Check size={12} /> : day.day}</span>
+                      <span className="day-kind">{DAY_LABEL[day.kind]}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ol>
+            {(() => {
+              const day = program?.days.find(item => item.day === programDay) ?? null
+              if (!day) return null
+              const position = programPosition?.day === day.day ? programPosition.index : null
+              return (
+                <div className="day-detail">
+                  <strong>
+                    Day {day.day} · {day.title}
+                  </strong>
+                  <span>{day.goal}</span>
+                  <div className="day-actions">
+                    {day.kind !== 'review' && (
+                      <button type="button" className="btn primary" onClick={() => startDay(day)}>
+                        <Play size={13} /> {position === null ? 'Start' : 'Restart'}
+                      </button>
+                    )}
+                    {day.kind === 'mistakes' && position !== null && position + 1 < day.positions.length && (
+                      <button type="button" className="btn" onClick={() => startMistake(day, position + 1)}>
+                        Next position ({position + 2} of {day.positions.length})
+                      </button>
+                    )}
+                    <button type="button" className={`btn${programDone.includes(day.day) ? ' active' : ''}`} onClick={() => tickDay(day.day)}>
+                      <Check size={13} /> {programDone.includes(day.day) ? 'Done' : 'Mark done'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
           </>
         ) : (
-          <span>{planStatus === 'error' ? 'The training plan could not be loaded.' : 'Reading your games…'}</span>
+          <span className="muted small">
+            {programStatus === 'error'
+              ? 'The weekly program could not be loaded.'
+              : programStatus === 'loading'
+                ? 'Reading your games…'
+                : program?.notes[0] ?? 'No weekly focus yet.'}
+          </span>
         )}
+        <details className="all-drills">
+          <summary>All drills{plan ? ` (${plan.items.length})` : ''}</summary>
+          {planStatus === 'ready' && plan ? (
+            <>
+              <p className="muted small">{planSummary(plan)}</p>
+              {orderPlan(plan.items).map(entry => (
+                <button
+                  key={`${entry.kind}:${entry.title}`}
+                  type="button"
+                  className="btn task-choice"
+                  disabled={!entry.ready}
+                  onClick={() => startPlanItem(entry)}
+                >
+                  {entry.title}
+                  <span>{entry.reason}</span>
+                  <span className="muted small">Goal: {entry.goal}</span>
+                </button>
+              ))}
+            </>
+          ) : (
+            <span>{planStatus === 'error' ? 'The training plan could not be loaded.' : 'Reading your games…'}</span>
+          )}
+        </details>
       </article>
 
       {catalogError && <p className="muted small">{catalogError}</p>}
-      <LessonCard
-        title="Opening"
-        note="Your most played openings. Pick a variant to drill it."
+      <div className="repertoire-head">
+        <span className="eyebrow">Your openings</span>
+        <ScoreLegend />
+      </div>
+      <RepertoireList
+        title="With White"
+        note="Click an opening to drill its most played line, or a variant to drill that one."
         active={activeKind === 'opening'}
         family={openingFamily}
         families={openingFamilies}
         variant={openingName}
-        variants={openingVariants}
         onFamily={chooseOpeningFamily}
         onVariant={chooseOpening}
-        onOpen={() => openingName && chooseOpening(openingName)}
         empty="No openings stored"
       />
-      <LessonCard
-        title="Defense"
-        note="Your most played defenses. Pick a variant to drill it."
+      <RepertoireList
+        title="With Black"
+        note="Your defenses, by games played."
         active={activeKind === 'defense'}
         family={defenseFamily}
         families={defenseFamilies}
         variant={defenseName}
-        variants={defenseVariants}
         onFamily={chooseDefenseFamily}
         onVariant={chooseDefense}
-        onOpen={() => defenseName && chooseDefense(defenseName)}
         empty="No defenses stored"
       />
       <article
@@ -987,18 +1149,38 @@ export function TrainingView({ active = true }: { active?: boolean }) {
       trace={coach.trace}
       mode={coach.mode}
       prompts={['Why this move?', 'What is the plan?', 'What should I train?']}
+      activeLine={activeLine}
+      onLine={(message, line) => {
+        if (!message.lines) return
+        setCoachLines({ messageId: message.id, lines: message.lines })
+        setActiveLine(current =>
+          current?.messageId === message.id && current.rank === line.rank ? null : { messageId: message.id, rank: line.rank },
+        )
+      }}
       onAsk={question => {
         const fromFen = displayFen
         if (playing && !complete && sideToMove(fen) === userSide && clock.running) clock.pause()
         void coach
-          .ask(question, {
-            mode: 'training',
-            fen: fromFen,
-            summary: session ? `${session.title}, ${progress.toLowerCase()}` : 'lesson',
-            profile: plan ? planSummary(plan) : undefined,
-          })
+          .ask(
+            question,
+            {
+              mode: 'training',
+              fen: fromFen,
+              summary: session ? `${session.title}, ${progress.toLowerCase()}` : 'lesson',
+              profile: plan ? planSummary(plan) : undefined,
+            },
+            {
+              onLines: (lines, messageId) => {
+                setCoachLines({ messageId, lines })
+                setActiveLine(null)
+              },
+            },
+          )
           .then(reply => {
-            if (reply?.play?.length) setCoachLine({ fen: fromFen, moves: reply.play })
+            if (!reply?.lines && reply?.play?.length) {
+              setCoachLines(null)
+              setCoachLine({ fen: fromFen, moves: reply.play })
+            }
           })
       }}
     />
@@ -1051,56 +1233,13 @@ export function TrainingView({ active = true }: { active?: boolean }) {
   )
 }
 
-interface LessonCardProps {
-  title: string
-  note: string
-  active: boolean
-  family: string
-  families: { name: string; games: number }[]
-  variant: string
-  variants: { label: string; lesson: { openingName: string; games: number } }[]
-  onFamily: (name: string) => void
-  onVariant: (name: string) => void
-  onOpen: () => void
-  empty: string
-}
-
-function LessonCard({ title, note, active, family, families, variant, variants, onFamily, onVariant, onOpen, empty }: LessonCardProps) {
-  return (
-    <article
-      className={`track-card${active ? ' active' : ''}`}
-      onClick={event => {
-        if ((event.target as HTMLElement).closest('select, option')) return
-        onOpen()
-      }}
-    >
-      <span className="eyebrow">{title}</span>
-      <label>
-        <span className="sr-only">{title}</span>
-        <select value={family} onChange={event => onFamily(event.target.value)} disabled={families.length === 0}>
-          {families.length === 0 && <option value="">{empty}</option>}
-          {families.map(item => (
-            <option key={item.name} value={item.name}>
-              {item.name} · {item.games}
-            </option>
-          ))}
-        </select>
-      </label>
-      {variants.length > 1 && (
-        <label>
-          <span className="sr-only">{title} variant</span>
-          <select value={variant} onChange={event => onVariant(event.target.value)}>
-            {variants.map(item => (
-              <option key={item.lesson.openingName} value={item.lesson.openingName}>
-                {item.label} · {item.lesson.games}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <span>{note}</span>
-    </article>
-  )
+/** Tile words short enough for seven tiles in a row. */
+const DAY_LABEL: Record<ProgramDay['kind'], string> = {
+  learn: 'Learn',
+  drill: 'Drill',
+  mistakes: 'Fix',
+  play: 'Play',
+  review: 'Review',
 }
 
 function endgameKey(lesson: EndgameLesson): string {

@@ -1,231 +1,113 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
-import { Shield, Swords, Timer, Trophy } from 'lucide-react'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import { StatCard } from '../components/StatCard'
-import { busiestBand, clockGameCounts, loadRecap, mostPlayedClock, mostPlayedLine } from '../data/recap'
-import type { OpeningStat, RecapBand, RecapPayload, TimeControlStat } from '../data/types'
-import { share, totalGames, winRate } from '../lib/stats'
+import { ScoreBar, ScoreLegend } from '../components/ScoreBar'
+import { busiestBand, chartLabel, loadRecap, mostPlayedClock, topLines } from '../data/recap'
+import type { OpeningStat, OutcomeCounts, RecapBand, RecapPayload } from '../data/types'
+import { totalGames, winRate } from '../lib/stats'
 
-const AXIS = { fill: '#8d96a5', fontSize: 11 }
-const GRID = '#232a35'
-const TOOLTIP = {
-  contentStyle: { background: '#151922', border: '1px solid #343c49', borderRadius: 8, fontSize: 12 },
-  labelStyle: { color: '#f3f5f7' },
-  cursor: { fill: 'rgba(255,255,255,0.04)' },
-}
-const COLORS = { win: '#b8f05a', draw: '#8d96a5', loss: '#ff7b72' }
-
-function repertoireRows(items: OpeningStat[]) {
-  return items.map(item => ({
-    name: item.name,
-    fullName: item.name,
-    eco: item.eco,
-    Wins: item.results.wins,
-    Draws: item.results.draws,
-    Losses: item.results.losses,
-    winRate: winRate(item.results),
-  }))
+interface ResultRow {
+  id: string
+  label: string
+  counts: OutcomeCounts
+  elo?: number | null
 }
 
-function RepertoireChart({ items }: { items: OpeningStat[] }) {
-  const rows = repertoireRows(items)
+function ResultRows({ title, rows }: { title: string; rows: ResultRow[] }) {
   return (
     <>
-      <div className="chart">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
-            <CartesianGrid stroke={GRID} horizontal={false} />
-            <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
-            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={190} />
-            <Tooltip {...TOOLTIP} />
-            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            <Bar dataKey="Wins" stackId="r" fill={COLORS.win} radius={[4, 0, 0, 4]} />
-            <Bar dataKey="Draws" stackId="r" fill={COLORS.draw} />
-            <Bar dataKey="Losses" stackId="r" fill={COLORS.loss} radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <table className="stat-table">
-        <thead>
-          <tr>
-            <th>Opening</th>
-            <th>ECO</th>
-            <th>Games</th>
-            <th>Win rate</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => (
-            <tr key={`${row.fullName}-${row.eco}`}>
-              <td>{row.fullName}</td>
-              <td>{row.eco}</td>
-              <td>{row.Wins + row.Draws + row.Losses}</td>
-              <td>{row.winRate}%</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <tr className="score-group">
+        <th colSpan={5} scope="colgroup">
+          {title}
+        </th>
+      </tr>
+      {rows.map(row => (
+        <tr key={row.id}>
+          <th scope="row">{row.label}</th>
+          <td className="num">{totalGames(row.counts)}</td>
+          <td className="bar-cell">
+            <ScoreBar {...row.counts} label={row.label} />
+          </td>
+          <td className="num">{winRate(row.counts)}%</td>
+          <td className="num muted">{row.elo ? Math.round(row.elo) : '—'}</td>
+        </tr>
+      ))}
     </>
   )
 }
 
-function ColorResultsChart({ band }: { band: RecapBand }) {
-  const rows = (['white', 'black'] as const).map(color => {
-    const counts = band[color]
-    const total = totalGames(counts)
-    return {
-      name: color === 'white' ? 'White pieces' : 'Black pieces',
-      Wins: share(counts.wins, total),
-      Draws: share(counts.draws, total),
-      Losses: share(counts.losses, total),
-      games: total,
-    }
-  })
-  return (
-    <>
-      <div className="chart short">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
-            <CartesianGrid stroke={GRID} horizontal={false} />
-            <XAxis type="number" domain={[0, 100]} unit="%" tick={AXIS} axisLine={false} tickLine={false} />
-            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={100} />
-            <Tooltip {...TOOLTIP} formatter={value => `${value}%`} />
-            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            <Bar dataKey="Wins" stackId="c" fill={COLORS.win} />
-            <Bar dataKey="Draws" stackId="c" fill={COLORS.draw} />
-            <Bar dataKey="Losses" stackId="c" fill={COLORS.loss} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <p className="muted small">
-        {rows[0].games} games with White · {rows[1].games} games with Black
-      </p>
-    </>
-  )
-}
-
-function TimeControlChart({ items }: { items: TimeControlStat[] }) {
-  const rows = items.map(item => ({
-    name: item.label,
-    Wins: item.results.wins,
-    Draws: item.results.draws,
-    Losses: item.results.losses,
-    winRate: winRate(item.results),
-    games: totalGames(item.results),
-  }))
-  return (
-    <>
-      <div className="chart short">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} layout="vertical" margin={{ left: 12, right: 16 }}>
-            <CartesianGrid stroke={GRID} horizontal={false} />
-            <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
-            <YAxis type="category" dataKey="name" tick={AXIS} axisLine={false} tickLine={false} width={80} />
-            <Tooltip {...TOOLTIP} />
-            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            <Bar dataKey="Wins" stackId="t" fill={COLORS.win} />
-            <Bar dataKey="Draws" stackId="t" fill={COLORS.draw} />
-            <Bar dataKey="Losses" stackId="t" fill={COLORS.loss} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <table className="stat-table">
-        <thead>
-          <tr>
-            <th>Time control</th>
-            <th>Games</th>
-            <th>Win rate</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => (
-            <tr key={row.name}>
-              <td>{row.name}</td>
-              <td>{row.games}</td>
-              <td>{row.winRate}%</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </>
-  )
-}
-
-function BandClockChart({ band }: { band: RecapBand }) {
-  const rows = clockGameCounts(band)
-  if (rows.length === 0) return <p className="muted small">No games in this band.</p>
-  return (
-    <div className="chart short">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ left: 0, right: 8, top: 8 }}>
-          <CartesianGrid stroke={GRID} vertical={false} />
-          <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} />
-          <YAxis tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} width={36} />
-          <Tooltip {...TOOLTIP} />
-          <Bar dataKey="games" name="Games" fill={COLORS.win} radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
-
-function ClockProfileChart({ clock }: { clock: TimeControlStat | undefined }) {
-  if (!clock) return <p className="muted small">No time control in this band.</p>
-  const results = [
-    { name: 'Wins', value: clock.results.wins },
-    { name: 'Draws', value: clock.results.draws },
-    { name: 'Losses', value: clock.results.losses },
+function ResultsCard({ band }: { band: RecapBand }) {
+  const colors: ResultRow[] = [
+    { id: 'white', label: 'With White', counts: band.white },
+    { id: 'black', label: 'With Black', counts: band.black },
   ]
-  const elos = [
-    { name: 'Opponent', value: clock.averageOpponentElo },
-    { name: 'When you win', value: clock.averageEloWhenWin },
-    { name: 'When you lose', value: clock.averageEloWhenLoss },
-  ].filter(item => item.value != null)
+  const clocks: ResultRow[] = band.timeControls
+    .filter(item => totalGames(item.results) > 0)
+    .sort((a, b) => totalGames(b.results) - totalGames(a.results))
+    .map(item => ({ id: item.id, label: item.label, counts: item.results, elo: item.averageOpponentElo }))
   return (
-    <>
-      <div className="chart short">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={results} margin={{ left: 0, right: 8, top: 8 }}>
-            <CartesianGrid stroke={GRID} vertical={false} />
-            <XAxis dataKey="name" tick={AXIS} axisLine={false} tickLine={false} />
-            <YAxis tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} width={36} />
-            <Tooltip {...TOOLTIP} />
-            <Bar dataKey="value" name="Games" fill="#77a7ff" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      {elos.length > 0 ? (
-        <div className="chart short">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={elos} margin={{ left: 0, right: 8, top: 8 }}>
-              <CartesianGrid stroke={GRID} vertical={false} />
-              <XAxis dataKey="name" tick={AXIS} axisLine={false} tickLine={false} />
-              <YAxis tick={AXIS} axisLine={false} tickLine={false} width={40} />
-              <Tooltip {...TOOLTIP} />
-              <Bar dataKey="value" name="Elo" fill={COLORS.draw} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+    <section className="recap-card" aria-labelledby="results-title">
+      <header className="recap-card-head">
+        <div>
+          <h3 id="results-title">Results</h3>
+          <p className="muted small">By color and by time control, in this band.</p>
         </div>
-      ) : (
-        <p className="muted small">Elo is not stored for this time control.</p>
-      )}
-    </>
+        <ScoreLegend />
+      </header>
+      <table className="score-table">
+        <thead>
+          <tr>
+            <th scope="col" />
+            <th scope="col" className="num">Games</th>
+            <th scope="col">Wins · draws · losses</th>
+            <th scope="col" className="num">Win %</th>
+            <th scope="col" className="num">Opp. Elo</th>
+          </tr>
+        </thead>
+        <tbody>
+          <ResultRows title="By color" rows={colors} />
+          {clocks.length > 0 && <ResultRows title="By time control" rows={clocks} />}
+        </tbody>
+      </table>
+    </section>
   )
 }
 
-function lineCaption(line: OpeningStat | undefined, sideTotal: number): string {
-  if (!line || sideTotal === 0) return 'No games in this band'
-  return `${share(totalGames(line.results), sideTotal)}% of games with these pieces · ${winRate(line.results)}% wins`
+function RepertoireCard({ title, side, items, sideTotal }: { title: string; side: string; items: OpeningStat[]; sideTotal: number }) {
+  const lines = topLines(items, 6)
+  return (
+    <section className="recap-card" aria-label={title}>
+      <header className="recap-card-head">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted small">
+            Your most played lines {side} · {sideTotal} games
+          </p>
+        </div>
+      </header>
+      {lines.length === 0 ? (
+        <p className="muted small">No games with these pieces in this band.</p>
+      ) : (
+        <ol className="repertoire-list">
+          {lines.map(line => {
+            // The family shows under the line only when the name has a variation after it.
+            const family = line.name.includes(':') ? line.name.split(':')[0].trim() : null
+            const games = totalGames(line.results)
+            return (
+              <li key={`${line.name}-${line.eco}`}>
+                <div className="repertoire-name">
+                  <strong title={line.name}>{chartLabel(line.name, line.eco)}</strong>
+                  {family && <span className="muted small">{family}</span>}
+                </div>
+                <span className="num">{games}</span>
+                <ScoreBar {...line.results} label={line.name} />
+                <span className="num">{winRate(line.results)}%</span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </section>
+  )
 }
 
 export function RecapView() {
@@ -275,7 +157,6 @@ export function RecapView() {
 function RecapBands({ payload }: { payload: RecapPayload }) {
   const initial = busiestBand(payload.bands)
   const [bandId, setBandId] = useState(initial?.id ?? '')
-  const [expanded, setExpanded] = useState<string | null>(null)
   const band = payload.bands.find(item => item.id === bandId) ?? initial
 
   if (!band) {
@@ -287,11 +168,8 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
     )
   }
 
-  const toggle = (id: string) => setExpanded(current => (current === id ? null : id))
   const whiteTotal = totalGames(band.white)
   const blackTotal = totalGames(band.black)
-  const topOpening = mostPlayedLine(band.openingsWhite)
-  const topDefense = mostPlayedLine(band.defensesBlack)
   const topClock = mostPlayedClock(band)
 
   return (
@@ -300,7 +178,7 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
         <div>
           <h2 className="recap-title">Rating-band recap</h2>
           <p className="panel-subtitle">
-            {payload.gameCount} stored games · win rate and repertoire by rating band. Pick a band to see its charts.
+            {payload.gameCount} stored games · results and repertoire by rating band.
           </p>
         </div>
         <div className="band-switch" role="tablist" aria-label="Rating band">
@@ -335,85 +213,20 @@ function RecapBands({ payload }: { payload: RecapPayload }) {
         </div>
         <div>
           <span className="eyebrow">Most played clock</span>
-          <strong>{topClock ? topClock.label : '—'}</strong>
+          <strong>{topClock && totalGames(topClock.results) > 0 ? topClock.label : '—'}</strong>
         </div>
       </div>
 
-      <div className="insight-grid">
-        <article className="stat-card expanded">
-          <div className="stat-summary insight-head">
-            <span className="stat-text">
-              <span className="eyebrow">Games in band</span>
-              <strong>{whiteTotal + blackTotal}</strong>
-              <span className="muted">Games in each time control</span>
-            </span>
-          </div>
-          <div className="stat-details">
-            <BandClockChart band={band} />
-          </div>
-        </article>
-        <article className="stat-card expanded">
-          <div className="stat-summary insight-head">
-            <span className="stat-text">
-              <span className="eyebrow">Most played clock</span>
-              <strong>{topClock ? topClock.label : '—'}</strong>
-              <span className="muted">Results and average Elo</span>
-            </span>
-          </div>
-          <div className="stat-details">
-            <ClockProfileChart clock={topClock} />
-          </div>
-        </article>
-      </div>
-
-      <motion.div layout className="card-grid" key={band.id}>
-        <StatCard
-          id="openings"
-          icon={Swords}
-          title="Most played lines · White"
-          headline={topOpening?.name ?? 'No games'}
-          caption={lineCaption(topOpening, whiteTotal)}
-          expanded={expanded === 'openings'}
-          onToggle={toggle}
-        >
-          <RepertoireChart items={band.openingsWhite} />
-        </StatCard>
-        <StatCard
-          id="defenses"
-          icon={Shield}
-          title="Most played lines · Black"
-          headline={topDefense?.name ?? 'No games'}
-          caption={lineCaption(topDefense, blackTotal)}
-          expanded={expanded === 'defenses'}
-          onToggle={toggle}
-        >
-          <RepertoireChart items={band.defensesBlack} />
-        </StatCard>
-        <StatCard
-          id="colors"
-          icon={Trophy}
-          title="Win percentage by color"
-          headline={`${winRate(band.white)}% · ${winRate(band.black)}%`}
-          caption="White pieces · Black pieces"
-          expanded={expanded === 'colors'}
-          onToggle={toggle}
-        >
-          <ColorResultsChart band={band} />
-        </StatCard>
-        <StatCard
-          id="clocks"
-          icon={Timer}
-          title="Results by time control"
-          headline={topClock ? `${topClock.label} · ${totalGames(topClock.results)}` : 'No games'}
-          caption={topClock ? `${winRate(topClock.results)}% wins in that time control` : 'No stored games'}
-          expanded={expanded === 'clocks'}
-          onToggle={toggle}
-        >
-          <TimeControlChart items={band.timeControls} />
-        </StatCard>
+      <motion.div className="recap-body" key={band.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
+        <ResultsCard band={band} />
+        <div className="recap-columns">
+          <RepertoireCard title="Repertoire · White" side="with White" items={band.openingsWhite} sideTotal={whiteTotal} />
+          <RepertoireCard title="Repertoire · Black" side="with Black" items={band.defensesBlack} sideTotal={blackTotal} />
+        </div>
       </motion.div>
       <p className="muted small recap-note">
-        Win rate counts draws as non-wins. Endgame types are not stored on these games, so this recap does not show them.
+        Win rate counts draws as non-wins. Hover a bar for its counts. Endgame types are not stored on these games, so
+        this recap does not show them.
       </p>
     </div>
   )

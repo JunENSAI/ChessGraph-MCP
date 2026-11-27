@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { replaySan } from '../lib/chess'
-import { keyMomentFromMoves, listedGame, outcomeFor, type StoredMove } from './games'
+import {
+  evalSeries,
+  gameStats,
+  keyMomentFromMoves,
+  listedGame,
+  openingFamilyOf,
+  outcomeFor,
+  type StoredMove,
+} from './games'
 
 describe('outcomeFor', () => {
   it('reads the result from the user color', () => {
@@ -59,5 +67,45 @@ describe('keyMomentFromMoves', () => {
       { ply: 1, san: 'e4', uci: 'e2e4', mover: 'w', cpAfter: null, cpLoss: null, bestUci: null },
     ]
     expect(keyMomentFromMoves(stored, 'white', plies)).toBeNull()
+  })
+})
+
+function move(ply: number, cpAfter: number | null, cpLoss: number | null): StoredMove {
+  return { ply, san: 'x', uci: 'a1a2', mover: ply % 2 === 1 ? 'w' : 'b', cpAfter, cpLoss, bestUci: null }
+}
+
+describe('evalSeries', () => {
+  it('reads every stored eval from White, clamps at five pawns and flags mate', () => {
+    const series = evalSeries([move(2, 120, 0), move(1, 30, 5), move(3, 800, 0), move(4, 10000, 900), move(5, null, null)], 'white')
+    expect(series.map(point => point.ply)).toEqual([1, 2, 3, 4, 5])
+    // Ply 2 is Black's move: +120 for Black is -1.2 for White.
+    expect(series.map(point => point.pawns)).toEqual([0.3, -1.2, 5, -5, null])
+    expect(series.map(point => point.mate)).toEqual([false, false, false, true, false])
+    expect(series.map(point => point.mine)).toEqual([true, false, true, false, true])
+  })
+})
+
+describe('gameStats', () => {
+  it('counts the user moves by severity and leaves mate swings out of the average', () => {
+    const stored = [move(1, 0, 20), move(3, 0, 60), move(5, 0, 150), move(7, 0, 400), move(9, 0, 9000), move(2, 0, 500), move(11, 0, null)]
+    expect(gameStats(stored, 'white')).toEqual({
+      evaluated: 5,
+      averageCpLoss: Math.round((20 + 60 + 150 + 400) / 4),
+      mateSwings: 1,
+      inaccuracies: 1,
+      mistakes: 1,
+      blunders: 2,
+    })
+  })
+
+  it('has no average without evaluated moves', () => {
+    expect(gameStats([move(1, null, null)], 'white').averageCpLoss).toBeNull()
+  })
+})
+
+describe('openingFamilyOf', () => {
+  it('keeps the part before the colon', () => {
+    expect(openingFamilyOf('Sicilian Defense: Najdorf Variation')).toBe('Sicilian Defense')
+    expect(openingFamilyOf('Bird Opening')).toBe('Bird Opening')
   })
 })
