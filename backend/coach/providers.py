@@ -67,6 +67,7 @@ def _tool_events(name: str, raw_input: Any, ctx: ToolContext) -> Iterator[Event 
 TOOL_SERVER = "coach"
 TOOL_PREFIX = f"mcp__{TOOL_SERVER}__"
 LOGIN_HINT = "Claude Code is not logged in. Run `claude` once and use /login, then ask again."
+MAX_TURNS_NOTE = "\n\nI stopped after the maximum number of tool rounds."
 _END = object()
 
 
@@ -126,6 +127,9 @@ class ClaudeProvider:
             allowed_tools=[TOOL_PREFIX + tool.name for tool in TOOLS],
             max_turns=self.max_turns,
             include_partial_messages=True,
+            # .env is loaded into os.environ (chess_mcp.config), and the CLI would
+            # bill a leftover API key instead of using the login: blank it.
+            env={"ANTHROPIC_API_KEY": ""},
         )
 
     async def run(self, request: CoachRequest, ctx: ToolContext) -> AsyncIterator[Event]:
@@ -150,6 +154,8 @@ class ClaudeProvider:
             queue.put_nowait({"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": graph is not None})
 
         task = asyncio.create_task(pump())
+        wrote = False  # text already sent in an earlier message of this answer
+        new_message = False
         try:
             while (item := await queue.get()) is not _END:
                 if isinstance(item, dict):
@@ -158,10 +164,20 @@ class ClaudeProvider:
                     yield {"type": "error", "message": sdk_error_message(item)}
                     return
                 elif isinstance(item, StreamEvent):
+                    kind = item.event.get("type")
                     delta = item.event.get("delta") or {}
-                    if item.event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+                    if kind == "message_start":
+                        new_message = wrote
+                    elif kind == "content_block_delta" and delta.get("type") == "text_delta":
+                        if new_message:
+                            # Text before and after a tool round would otherwise run together.
+                            yield {"type": "text", "text": "\n\n"}
+                            new_message = False
+                        wrote = True
                         yield {"type": "text", "text": delta["text"]}
                 elif isinstance(item, ResultMessage):
+                    if item.subtype == "error_max_turns":
+                        yield {"type": "text", "text": MAX_TURNS_NOTE}
                     yield result_event(item, self.mode)
                     return
         finally:

@@ -269,6 +269,8 @@ def test_claude_options_isolate_the_session_to_the_coach_tools(monkeypatch) -> N
     assert options.setting_sources == []  # no user/project settings, hooks or CLAUDE.md
     assert options.strict_mcp_config is True
     assert options.include_partial_messages is True
+    # A leftover key loaded from .env must not switch the CLI to API billing.
+    assert options.env == {"ANTHROPIC_API_KEY": ""}
     assert options.allowed_tools == [f"mcp__coach__{tool.name}" for tool in TOOLS]
     assert set(options.mcp_servers["coach"]["tools"]) == {tool.name for tool in TOOLS}
     assert calls[0]["prompt"].startswith(f"Current position (FEN): {START}")
@@ -292,10 +294,25 @@ def test_a_down_store_becomes_an_error_result_not_a_crash(monkeypatch) -> None:
     assert events[-1]["type"] == "done"
 
 
-def test_turn_cap_ends_the_answer(monkeypatch) -> None:
-    script(monkeypatch, [result("error_max_turns", is_error=True, stop_reason=None)])
+def test_turn_cap_ends_the_answer_with_a_notice(monkeypatch) -> None:
+    script(monkeypatch, [delta("Checking."), result("error_max_turns", is_error=True, stop_reason=None)])
     events = collect(ClaudeProvider(), request(), make_ctx())
+    assert events[-2] == {"type": "text", "text": providers.MAX_TURNS_NOTE}
     assert events[-1] == {"type": "done", "mode": "claude", "stop_reason": "max_turns"}
+
+
+def message_start() -> StreamEvent:
+    return StreamEvent(uuid="u", session_id="s", event={"type": "message_start", "message": {}})
+
+
+def test_text_of_separate_messages_is_kept_apart(monkeypatch) -> None:
+    script(
+        monkeypatch,
+        [message_start(), delta("Checking."), ("tool", "get_player_summary", {}), message_start(), delta("MOVE: e4"), result()],
+    )
+    events = collect(ClaudeProvider(), request(), make_ctx())
+    text = "".join(event["text"] for event in events if event["type"] == "text")
+    assert text == "Checking.\n\nMOVE: e4"
 
 
 def test_refusal_ends_with_an_error_event(monkeypatch) -> None:

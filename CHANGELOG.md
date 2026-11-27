@@ -826,3 +826,35 @@ New tests:
 | `uv run pytest` | 181 passed, 7 skipped |
 | `claude plugin validate plugins/chessgraph` | passed |
 | Search of the docs for `ANTHROPIC_API_KEY`, the API loop and the refusal fallback | none left outside this changelog |
+
+## Review fixes for batches 6–8
+
+A code review of the pull request found these. All are in
+`backend/coach/providers.py` unless noted.
+
+### Changed
+
+- **No silent API billing.** `chess_mcp/config.py` loads `.env` into the
+  process environment, and the CLI inherits it. A leftover `ANTHROPIC_API_KEY`
+  line would have made the coach bill the API instead of using the login. The
+  session options now set `env={"ANTHROPIC_API_KEY": ""}`.
+- **Turn cap notice.** When Claude reaches the 8-turn cap, the answer now ends
+  with "I stopped after the maximum number of tool rounds." The Messages API
+  loop did this. Without it, the UI kept and cached the text written before the
+  tool calls as if it were the full answer.
+- **Separate messages stay apart.** Text that Claude writes before a tool round
+  and after it is now separated by a blank line instead of running together.
+- `backend/coach/prompt.py`: the system prompt's evidence-order line now says
+  the graph context is already retrieved, and is read with the stored games
+  before Stockfish.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 182 passed, 7 skipped |
+| SDK probe with `ANTHROPIC_API_KEY` set to a fake key in the environment and the new option | `apiKeySource: none`, answered on the login |
+
+New and changed tests in `tests/test_coach.py`: the session options blank the
+key, the turn cap ends with the notice before `done`, and text from two
+messages is joined with a blank line.
