@@ -53,12 +53,24 @@ process that dies answers 503.
   - The player is never an argument; it comes from `CHESS_USERNAME`.
   - Every result is redacted: the owner's account becomes `you` and anyone
     else becomes `opponent`.
-- **`prompt.py`** holds the fixed system prompt (cached) and builds the user
-  turn from the board context.
+- **`tools.py`** also has `graph_context(fen, ctx)`. It calls
+  `Neo4jRepository.get_style_context` and reduces the result to compact,
+  redacted JSON of at most 6,000 characters. It returns `None` when Neo4j
+  fails.
+- **`prompt.py`** holds the fixed system prompt. It builds one prompt from the
+  earlier turns, the board context, the graph context and the question.
 - **`providers.py`** has two providers:
-  - `ClaudeProvider` runs a manual streamed tool loop: at most 8 rounds,
-    results returned in one message, `is_error` on failure, and handling for
-    `refusal`, `pause_turn` and `max_tokens`.
+  - `ClaudeProvider` runs Claude through the Claude Agent SDK, on the local
+    Claude Code login, with no API key.
+    - First it fetches the graph context, reported as `get_style_context` on
+      the `neo4j` source.
+    - Then it runs one `query()` with the coach system prompt and these
+      options: `tools=[]`, `setting_sources=[]`, `strict_mcp_config=True`, and
+      the fourteen tools as an in-process MCP server (`mcp__coach__*`).
+    - Tool calls are serialized, because one Stockfish process serves them.
+    - Text streams from partial messages. The turn cap is 8 (`max_turns`).
+    - A refusal, a missing login and a missing CLI each end with their own
+      `error` message.
   - `OfflineProvider` runs a fixed tool plan and a text template.
 
 `POST /api/coach/chat` takes:
@@ -83,8 +95,6 @@ The coach reads these `.env` settings:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | empty | Empty means offline mode |
-| `COACH_MODE` | `auto` | `auto`, `claude` or `offline` |
-| `CLAUDE_MODEL` | `claude-opus-5-5` | Model for the tool loop |
+| `COACH_MODE` | `claude` | `claude` (your Claude Code login) or `offline` |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | Model of the Claude Code session |
 | `CLAUDE_EFFORT` | `low` | `low` to `max` |
-| `CLAUDE_REFUSAL_FALLBACK` | `default` | `off` disables the server-side fallback |

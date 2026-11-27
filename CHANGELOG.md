@@ -794,3 +794,35 @@ New tests:
     game count, REACHED = moves + games, PLAYED_MOVE `times` by mover,
     W + D + L = games, MISTAKE_IN by severity, one owner.
   - `get_style_context` from the start position.
+
+## Batch 8: README and docs for the subscription coach and the graph
+
+### Changed
+
+- `README.md`:
+  - The intro, the architecture diagram and the prerequisites now describe the
+    Claude Code login: the API calls Claude Code through the Agent SDK. The
+    API key is gone.
+  - Quick start step 2 says to run `claude` and `/login` once.
+  - "The in-app coach" is rewritten to cover:
+    - the two modes;
+    - the isolated session;
+    - the graph-context pre-fetch;
+    - redaction;
+    - the personal-use limit of a subscription login.
+  - The new "Graph reliability" section has the audit numbers, the two known
+    gaps, and the command that rechecks them.
+  - "Current scope" lists the in-app coach.
+- `backend/README.md`: the coach section covers `graph_context`, the Agent SDK
+  provider and its options. The settings table drops `ANTHROPIC_API_KEY` and
+  `CLAUDE_REFUSAL_FALLBACK`.
+- `etl/neo4j_db/neo4j_init.md`: adds the known gaps and the consistency check.
+- `CLAUDE.md`: the layout line for `backend/coach/`.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 181 passed, 7 skipped |
+| `claude plugin validate plugins/chessgraph` | passed |
+| Search of the docs for `ANTHROPIC_API_KEY`, the API loop and the refusal fallback | none left outside this changelog |
