@@ -409,7 +409,7 @@ Nineteen routes serve the interface, the coaching reads, and the coach:
 | `GET /api/games` | Filter games by player, type, outcome, ECO, and date |
 | `GET /api/games/{game_id}` | One game's metadata and movetext |
 | `GET /api/games/{game_id}/moves` | Paged moves and stored evaluations |
-| `GET /api/lessons/openings` | Opening lessons for a colour |
+| `GET /api/lessons/openings` | Opening lessons for a colour, with your W/D/L per line |
 | `GET /api/lessons/endgames` | Endgame lessons for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest target, calculation, four tasks |
 | `GET /api/coach/plan` | The ranked training plan |

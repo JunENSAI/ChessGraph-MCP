@@ -511,6 +511,13 @@ class PostgresRepository:
                     SELECT
                         btrim(opening_name) AS opening_name,
                         count(*) AS games,
+                        count(*) FILTER (
+                            WHERE result::text = CASE WHEN :color = 'white' THEN '1-0' ELSE '0-1' END
+                        ) AS wins,
+                        count(*) FILTER (WHERE result = '1/2-1/2') AS draws,
+                        count(*) FILTER (
+                            WHERE result::text = CASE WHEN :color = 'white' THEN '0-1' ELSE '1-0' END
+                        ) AS losses,
                         mode() WITHIN GROUP (ORDER BY eco_code) AS eco_code
                     FROM games
                     WHERE user_color = :color
@@ -527,6 +534,9 @@ class PostgresRepository:
                 SELECT
                     p.opening_name,
                     p.games,
+                    p.wins,
+                    p.draws,
+                    p.losses,
                     p.eco_code,
                     theory.uci_line,
                     theory.pgn_line

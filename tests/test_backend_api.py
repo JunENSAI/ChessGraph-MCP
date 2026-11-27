@@ -76,6 +76,9 @@ class LessonPostgres(FakePostgres):
                 opening_name="Italian Game",
                 eco_code="C50",
                 games=12,
+                wins=6,
+                draws=2,
+                losses=4,
                 uci_line="e2e4 e7e5",
                 pgn_line="1. e4 e5",
             )
@@ -115,6 +118,7 @@ def test_opening_lessons_use_the_requested_color() -> None:
     body = response.json()
     assert body["lessons"][0]["opening_name"] == "Italian Game"
     assert body["lessons"][0]["uci_line"] == "e2e4 e7e5"
+    assert (body["lessons"][0]["wins"], body["lessons"][0]["draws"], body["lessons"][0]["losses"]) == (6, 2, 4)
 
 
 def test_endgame_lessons_use_the_player_rating() -> None:

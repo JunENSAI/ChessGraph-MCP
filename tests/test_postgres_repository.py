@@ -209,6 +209,9 @@ def test_opening_lessons_bind_the_player_and_color() -> None:
     assert "junior" not in query_sql
     assert query_params == {"player": "junior", "color": "white", "limit": 5}
     assert "opening_theory" in query_sql
+    # Results are counted from the user's side, with the color bound, never inlined.
+    assert "AS wins" in query_sql and "AS draws" in query_sql and "AS losses" in query_sql
+    assert "'white' THEN '1-0'" in query_sql
 
 
 def test_endgame_lessons_bind_the_rating() -> None:

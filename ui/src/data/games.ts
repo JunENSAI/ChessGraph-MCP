@@ -1,5 +1,6 @@
 import { tryUci, type ReplayedPly } from '../lib/chess'
 import { whiteEvalFromStored } from '../lib/eval'
+import { SEVERITY_CP } from '../lib/notation'
 import type { Color, GameCategory, KeyMoment, Outcome } from './types'
 
 export const GAMES_PAGE = 25
@@ -107,6 +108,69 @@ export function keyMomentFromMoves(stored: StoredMove[], userColor: Color, plies
     cpLoss: top.cpLoss ?? undefined,
     showEngine: Boolean(best),
   }
+}
+
+/** The eval graph is clamped at five pawns, like the eval bar. Mate fills it. */
+export const EVAL_CLAMP_PAWNS = 5
+/** Stored mate scores are flattened to +/-10000, so a loss this large is a swing to or from mate. */
+export const MATE_SWING_CP = 5_000
+
+export interface EvalPoint {
+  ply: number
+  /** Stored evaluation after this ply, in pawns from White's side, clamped. Null when not evaluated. */
+  pawns: number | null
+  mate: boolean
+  /** Who made the move: the user or the opponent. */
+  mine: boolean
+  cpLoss: number | null
+}
+
+/** The stored evaluation after every ply, from White's side, for the eval graph. */
+export function evalSeries(stored: StoredMove[], userColor: Color): EvalPoint[] {
+  const turn = userColor === 'white' ? 'w' : 'b'
+  return [...stored]
+    .sort((left, right) => left.ply - right.ply)
+    .map(move => {
+      const base = { ply: move.ply, mine: move.mover === turn, cpLoss: move.cpLoss }
+      if (move.cpAfter === null) return { ...base, pawns: null, mate: false }
+      const white = whiteEvalFromStored(move.cpAfter, move.mover)
+      const pawns = (white.whiteCp ?? 0) / 100
+      const clamped = Math.max(-EVAL_CLAMP_PAWNS, Math.min(EVAL_CLAMP_PAWNS, pawns))
+      return { ...base, pawns: Math.round(clamped * 100) / 100, mate: white.mate !== null }
+    })
+}
+
+export interface GameStats {
+  /** The user's evaluated moves. */
+  evaluated: number
+  /** Mean stored centipawn loss of the user's moves, leaving out swings to or from mate. */
+  averageCpLoss: number | null
+  mateSwings: number
+  inaccuracies: number
+  mistakes: number
+  blunders: number
+}
+
+/** The user's accuracy in one game, from the stored centipawn loss (same thresholds as the move glyphs). */
+export function gameStats(stored: StoredMove[], userColor: Color): GameStats {
+  const turn = userColor === 'white' ? 'w' : 'b'
+  const losses = stored.filter(move => move.mover === turn && move.cpLoss !== null).map(move => move.cpLoss as number)
+  const counted = losses.filter(loss => loss < MATE_SWING_CP)
+  const band = (low: number, high: number) => losses.filter(loss => loss >= low && loss < high).length
+  return {
+    evaluated: losses.length,
+    averageCpLoss: counted.length ? Math.round(counted.reduce((sum, loss) => sum + loss, 0) / counted.length) : null,
+    mateSwings: losses.length - counted.length,
+    inaccuracies: band(SEVERITY_CP.inaccuracy, SEVERITY_CP.mistake),
+    mistakes: band(SEVERITY_CP.mistake, SEVERITY_CP.blunder),
+    blunders: band(SEVERITY_CP.blunder, Infinity),
+  }
+}
+
+/** The opening family of a stored name: the part before the colon. */
+export function openingFamilyOf(name: string): string {
+  const colon = name.indexOf(':')
+  return (colon === -1 ? name : name.slice(0, colon)).trim()
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {

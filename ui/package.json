@@ -17,7 +17,6 @@
     "react": "^19.3.1",
     "react-chessboard": "^5.12.1",
     "react-dom": "^19.3.1",
-    "recharts": "^3.10.1",
     "thinking-orbs": "^0.3.2"
   },
   "devDependencies": {

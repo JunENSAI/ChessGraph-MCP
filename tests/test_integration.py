@@ -8,6 +8,7 @@ import chess
 import pytest
 
 from chess_mcp.config import (
+    get_chess_username,
     get_neo4j_settings,
     get_postgres_settings,
     get_stockfish_settings,
@@ -27,6 +28,20 @@ def test_postgres_read_connection() -> None:
     repository = PostgresRepository.from_settings(get_postgres_settings())
     try:
         repository.list_games(limit=1)
+    finally:
+        repository.close()
+
+
+def test_opening_lessons_count_results_from_the_player_side() -> None:
+    """The W/D/L columns compare the game_result enum, and never exceed the games."""
+    repository = PostgresRepository.from_settings(get_postgres_settings())
+    try:
+        for color in ("white", "black"):
+            lessons = repository.list_opening_lessons(player=get_chess_username(), color=color, limit=5)
+            for lesson in lessons:
+                assert lesson.wins + lesson.draws + lesson.losses <= lesson.games
+            if lessons:
+                assert sum(lesson.wins + lesson.draws + lesson.losses for lesson in lessons) > 0
     finally:
         repository.close()
 

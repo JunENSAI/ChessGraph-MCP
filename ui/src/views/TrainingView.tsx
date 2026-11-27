@@ -41,6 +41,8 @@ import {
   type TrainingTask,
 } from '../data/lessons'
 import { endgameTitle, groupOpenings, openingFamilyName } from '../data/openings'
+import { RepertoireList } from '../components/RepertoireList'
+import { ScoreLegend } from '../components/ScoreBar'
 import { loadTrainingPlan, orderPlan, planSummary, type PlanItem, type TrainingPlan } from '../data/plan'
 import type { Color } from '../data/types'
 import { useBoardKeys } from '../hooks/useBoardKeys'
@@ -535,8 +537,6 @@ export function TrainingView({ active = true }: { active?: boolean }) {
 
   const openingFamilies = useMemo(() => groupOpenings(openings), [openings])
   const defenseFamilies = useMemo(() => groupOpenings(defenses), [defenses])
-  const openingVariants = openingFamilies.find(item => item.name === openingFamily)?.variants ?? []
-  const defenseVariants = defenseFamilies.find(item => item.name === defenseFamily)?.variants ?? []
 
   const startEndgame = async (task: TrainingTask) => {
     const base = sessionFromTask(task)
@@ -916,30 +916,30 @@ export function TrainingView({ active = true }: { active?: boolean }) {
       </article>
 
       {catalogError && <p className="muted small">{catalogError}</p>}
-      <LessonCard
-        title="Opening"
-        note="Your most played openings. Pick a variant to drill it."
+      <div className="repertoire-head">
+        <span className="eyebrow">Your openings</span>
+        <ScoreLegend />
+      </div>
+      <RepertoireList
+        title="With White"
+        note="Click an opening to drill its most played line, or a variant to drill that one."
         active={activeKind === 'opening'}
         family={openingFamily}
         families={openingFamilies}
         variant={openingName}
-        variants={openingVariants}
         onFamily={chooseOpeningFamily}
         onVariant={chooseOpening}
-        onOpen={() => openingName && chooseOpening(openingName)}
         empty="No openings stored"
       />
-      <LessonCard
-        title="Defense"
-        note="Your most played defenses. Pick a variant to drill it."
+      <RepertoireList
+        title="With Black"
+        note="Your defenses, by games played."
         active={activeKind === 'defense'}
         family={defenseFamily}
         families={defenseFamilies}
         variant={defenseName}
-        variants={defenseVariants}
         onFamily={chooseDefenseFamily}
         onVariant={chooseDefense}
-        onOpen={() => defenseName && chooseDefense(defenseName)}
         empty="No defenses stored"
       />
       <article
@@ -1077,58 +1077,6 @@ export function TrainingView({ active = true }: { active?: boolean }) {
         ]}
       />
     </div>
-  )
-}
-
-interface LessonCardProps {
-  title: string
-  note: string
-  active: boolean
-  family: string
-  families: { name: string; games: number }[]
-  variant: string
-  variants: { label: string; lesson: { openingName: string; games: number } }[]
-  onFamily: (name: string) => void
-  onVariant: (name: string) => void
-  onOpen: () => void
-  empty: string
-}
-
-function LessonCard({ title, note, active, family, families, variant, variants, onFamily, onVariant, onOpen, empty }: LessonCardProps) {
-  return (
-    <article
-      className={`track-card${active ? ' active' : ''}`}
-      onClick={event => {
-        if ((event.target as HTMLElement).closest('select, option')) return
-        onOpen()
-      }}
-    >
-      <span className="eyebrow">{title}</span>
-      <label>
-        <span className="sr-only">{title}</span>
-        <select value={family} onChange={event => onFamily(event.target.value)} disabled={families.length === 0}>
-          {families.length === 0 && <option value="">{empty}</option>}
-          {families.map(item => (
-            <option key={item.name} value={item.name}>
-              {item.name} · {item.games}
-            </option>
-          ))}
-        </select>
-      </label>
-      {variants.length > 1 && (
-        <label>
-          <span className="sr-only">{title} variant</span>
-          <select value={variant} onChange={event => onVariant(event.target.value)}>
-            {variants.map(item => (
-              <option key={item.lesson.openingName} value={item.lesson.openingName}>
-                {item.label} · {item.lesson.games}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <span>{note}</span>
-    </article>
   )
 }
 

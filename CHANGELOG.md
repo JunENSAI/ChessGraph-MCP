@@ -1025,3 +1025,99 @@ In the browser:
 
 New tests in `ui/src/data/recap.test.ts`: shares that sum to 100 (thirds, a
 zero row, odd counts) and the order of the top lines.
+
+## Batch 11: games and openings presentation
+
+### Why
+
+- An opened game showed only its moves. You had to read the whole list to see
+  how it went.
+- The openings were two native drop-downs with game counts and no results.
+
+### Changed
+
+- **Opening a game (My games → Moves tab):**
+  - `ui/src/components/GameCard.tsx`, a new summary card:
+    - the result, your colour and both ratings;
+    - your average centipawn loss, inaccuracies (50–99 cp), mistakes
+      (100–299) and blunders (300+). The thresholds are those of the move
+      glyphs;
+    - the opponent's counts on one line.
+    - Swings to or from mate (stored as ±10000) stay out of the average and
+      are named in the tooltip.
+  - `ui/src/components/EvalGraph.tsx`, a new SVG eval graph:
+    - the stored `eval_cp_after` after every ply, from White's side, clamped
+      at ±5 pawns like the eval bar;
+    - White's area is light above the middle line and Black's dark below it;
+    - dots mark your mistakes and blunders (blunders larger), and a lime ring
+      marks the key moment;
+    - hovering shows the move, the eval and the cp loss; a click jumps the
+      board to that ply.
+  - The Moves tab now scrolls as a whole, so the move list keeps at least
+    200px under the card.
+- **Game list rows:** a result stripe on the left edge (win, draw, loss
+  palette). The result word stays, so colour is not the only cue. The row now
+  shows the opening family, with the variation on its own line.
+- **Openings (Play & train → Play tab):**
+  - `ui/src/components/RepertoireList.tsx` replaces the two selects. It has a
+    **With White** list and a **With Black** list, each family showing its
+    games, a W/D/L bar and the win %.
+  - Clicking a family drills its most played line and opens its variants.
+    Each variant has its own bar and can be drilled.
+  - When two stored names shorten to the same label, the ECO code is added.
+    For example, the London against 1…d5 is "Main line · D02" and against
+    1…Nf6 it is "Main line · A48".
+- **Backend:**
+  - `list_opening_lessons` (`chess_mcp/postgres/repository.py`) now returns
+    `wins`, `draws` and `losses` from the player's side. It is still one
+    bound, read-only query.
+  - `OpeningLesson` gained the three fields, defaulting to 0.
+- **Explorer:** "Your games here" gains the same W/D/L bar.
+- **Removed:** Recharts (no chart used it any more) and `ui/src/lib/palette.ts`
+  (nothing imported it). The colours stay as CSS tokens. The new
+  `--eval-plot` token holds the graph's mid-grey plot.
+
+### Fixed during the batch
+
+- The first version of the W/D/L SQL compared the `game_result` enum to a
+  `CASE` text value. PostgreSQL rejected it (`operator does not exist:
+  game_result = text`) and the route answered 503. The fake-engine unit test
+  could not see this.
+  - **Fix:** the query uses `result::text`.
+  - **New integration test:**
+    `test_opening_lessons_count_results_from_the_player_side`. It runs the
+    query on the real database for both colours and checks that
+    W + D + L ≤ games.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 186 passed, 8 skipped |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 8 passed |
+| `cd ui && npm test` | 108 passed |
+| `cd ui && npm run lint` | the 2 existing warnings only |
+| `cd ui && npx tsc -b && npm run build` | built |
+
+New tests:
+
+- `ui/src/data/games.test.ts`:
+  - eval series: White's side, clamping, mate, gaps, whose move;
+  - game stats: severity bands, the mate swing left out, no average without
+    evaluated moves;
+  - the opening family.
+- `ui/src/data/openings.test.ts`: family W/D/L sums, the win share, ECO labels
+  for duplicates.
+- `tests/test_postgres_repository.py`: the W/D/L columns are in the bound query.
+- `tests/test_backend_api.py`: the route returns them.
+
+Live data (white): London System with e6, 320 games, 179 W, 28 D, 113 L.
+
+In the browser:
+
+- **1440×900:** the With White and With Black lists render with bars.
+- **A lost game opened:** the card shows 3 mistakes and 1 blunder, matching the
+  4 dots on the graph, plus the key moment ring. Hovering showed
+  "12… Bf5 -0.6 · 3 cp loss", and a click moved the board to 12… Bf5.
+- **1024×640:** the card, key moment and move list fit, and the tab scrolls.
+- **375×812:** no horizontal scroll on either view.

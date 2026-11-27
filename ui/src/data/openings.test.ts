@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { OpeningLesson } from './lessons'
-import { endgameTitle, groupOpenings, openingFamilyName } from './openings'
+import { endgameTitle, groupOpenings, openingFamilyName, winPercent } from './openings'
 
-function lesson(name: string, games: number): OpeningLesson {
-  return { openingName: name, ecoCode: null, games, uciLine: 'e2e4', pgnLine: null }
+function lesson(name: string, games: number, wins = 0, draws = 0, losses = 0, ecoCode: string | null = null): OpeningLesson {
+  return { openingName: name, ecoCode, games, wins, draws, losses, uciLine: 'e2e4', pgnLine: null }
 }
 
 describe('openingFamilyName', () => {
@@ -46,5 +46,32 @@ describe('endgameTitle', () => {
     expect(endgameTitle('KPPvKPP')).toBe('King and two pawns vs king and two pawns')
     expect(endgameTitle('KQvK')).toBe('King and queen vs king')
     expect(endgameTitle('KvKP')).toBe('King vs king and pawn')
+  })
+})
+
+describe('family results', () => {
+  it('sums the results of the variants into the family', () => {
+    const [london] = groupOpenings([
+      lesson("Queen's Pawn Game: London System, with e6", 10, 6, 1, 3),
+      lesson("Queen's Pawn Game: London System", 5, 2, 2, 1),
+    ])
+    expect(london.name).toBe('London System')
+    expect(london.results).toEqual({ wins: 8, draws: 3, losses: 4 })
+    expect(winPercent(london.results)).toBe(53)
+  })
+
+  it('has no win share without results', () => {
+    expect(winPercent({ wins: 0, draws: 0, losses: 0 })).toBeNull()
+  })
+})
+
+describe('variant labels', () => {
+  it('adds the ECO code when two stored names shorten to the same label', () => {
+    const [london] = groupOpenings([
+      lesson("Queen's Pawn Game: London System", 252, 0, 0, 0, 'D02'),
+      lesson('London System', 135, 0, 0, 0, 'A48'),
+      lesson('London System, with Be2', 26, 0, 0, 0, 'A48'),
+    ])
+    expect(london.variants.map(variant => variant.label)).toEqual(['Main line · D02', 'Main line · A48', 'with Be2'])
   })
 })

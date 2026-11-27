@@ -9,6 +9,10 @@ export interface OpeningLesson {
   openingName: string
   ecoCode: string | null
   games: number
+  /** Results with this opening, from the user's side. */
+  wins: number
+  draws: number
+  losses: number
   uciLine: string | null
   pgnLine: string | null
 }
@@ -41,6 +45,9 @@ interface OpeningLessonJson {
   opening_name: string
   eco_code: string | null
   games: number
+  wins?: number
+  draws?: number
+  losses?: number
   uci_line: string | null
   pgn_line: string | null
 }
@@ -221,6 +228,9 @@ export async function loadOpeningLessons(color: Color): Promise<OpeningLesson[]>
     openingName: lesson.opening_name,
     ecoCode: lesson.eco_code,
     games: lesson.games,
+    wins: lesson.wins ?? 0,
+    draws: lesson.draws ?? 0,
+    losses: lesson.losses ?? 0,
     uciLine: lesson.uci_line,
     pgnLine: lesson.pgn_line,
   }))

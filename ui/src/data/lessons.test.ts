@@ -25,7 +25,7 @@ describe('lineFromPgn', () => {
 describe('sessionFromOpening', () => {
   it('builds a white drill from the theory line', () => {
     const session = sessionFromOpening(
-      { openingName: 'Italian Game', ecoCode: 'C50', games: 8, uciLine: 'e2e4 e7e5', pgnLine: null },
+      { openingName: 'Italian Game', ecoCode: 'C50', games: 8, wins: 0, draws: 0, losses: 0, uciLine: 'e2e4 e7e5', pgnLine: null },
       'white',
     )
     expect(session.userColor).toBe('white')
@@ -35,7 +35,7 @@ describe('sessionFromOpening', () => {
 
   it('reports a missing theory line', () => {
     const session = sessionFromOpening(
-      { openingName: 'Unlisted', ecoCode: null, games: 3, uciLine: null, pgnLine: null },
+      { openingName: 'Unlisted', ecoCode: null, games: 3, wins: 0, draws: 0, losses: 0, uciLine: null, pgnLine: null },
       'black',
     )
     expect(session.missingLine).toBe(true)
@@ -45,7 +45,7 @@ describe('sessionFromOpening', () => {
 
   it('reports the drill length instead of hiding a short line', () => {
     const session = sessionFromOpening(
-      { openingName: 'X', ecoCode: null, games: 3, uciLine: 'e2e4 e7e5', pgnLine: null },
+      { openingName: 'X', ecoCode: null, games: 3, wins: 0, draws: 0, losses: 0, uciLine: 'e2e4 e7e5', pgnLine: null },
       'white',
     )
     expect(drillNote(session)).toContain('2 plies')

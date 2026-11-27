@@ -26,12 +26,18 @@ import { Chess } from 'chess.js'
 import type { Arrow } from 'react-chessboard'
 import { BoardStage } from '../components/BoardStage'
 import { CoachPanel } from '../components/CoachPanel'
+import { EvalGraph } from '../components/EvalGraph'
 import { ExplorerPanel } from '../components/ExplorerPanel'
+import { GameCard } from '../components/GameCard'
 import { MoveTable } from '../components/MoveTable'
 import { SidePanel } from '../components/SidePanel'
 import {
   CATEGORY_LABELS,
+  evalSeries,
+  gameStats,
   keyMomentFromMoves,
+  MATE_SWING_CP,
+  openingFamilyOf,
   loadGameMoves,
   loadGamesPage,
   loadListedGame,
@@ -62,8 +68,6 @@ const CATEGORY_ICONS: Record<GameCategory, LucideIcon> = {
 }
 const RESULT_LABEL = { win: 'Win', loss: 'Loss', draw: 'Draw', unfinished: 'Unfinished' }
 const ARROW = { played: '#ff7b72', best: '#b8f05a', preview: '#77a7ff' }
-/** Stored mate scores are flattened to +/-10000, so a loss this large is a swing to or from mate (as in the coach and the graph). */
-const MATE_SWING_CP = 5_000
 
 type ReviewTab = 'games' | 'moves' | 'coach' | 'explorer'
 
@@ -394,12 +398,14 @@ export function GamesView({ active }: { active: boolean }) {
       ? 'Start'
       : `${Math.ceil(ply / 2)}${ply % 2 === 1 ? '.' : '…'} ${plies[ply - 1]?.san ?? ''}${glyphFor(detail?.stored[ply - 1]?.cpLoss) ?? ''}`
   const lineResult = line ? resultText(fen) : null
-  const errors = useMemo(() => {
-    if (!detail) return { mine: 0, theirs: 0 }
-    const mover = detail.userColor === 'white' ? 'w' : 'b'
-    const count = (mine: boolean) =>
-      detail.stored.filter(move => (move.mover === mover) === mine && (glyphFor(move.cpLoss) === '?' || glyphFor(move.cpLoss) === '??')).length
-    return { mine: count(true), theirs: count(false) }
+  const review = useMemo(() => {
+    if (!detail) return null
+    const other = detail.userColor === 'white' ? 'black' : 'white'
+    return {
+      mine: gameStats(detail.stored, detail.userColor),
+      theirs: gameStats(detail.stored, other),
+      series: evalSeries(detail.stored, detail.userColor),
+    }
   }, [detail])
 
   const controls = (
@@ -470,13 +476,14 @@ export function GamesView({ active }: { active: boolean }) {
                     <button
                       key={item.id}
                       type="button"
-                      className={`game-row${item.id === gameId ? ' active' : ''}`}
+                      className={`game-row ${item.result}${item.id === gameId ? ' active' : ''}`}
                       onClick={() => selectGame(item.id)}
                     >
                       <span className="game-meta">
                         {item.timeControl} · {item.playedOn}
                       </span>
-                      <strong>{item.opening}</strong>
+                      <strong>{openingFamilyOf(item.opening)}</strong>
+                      {item.opening.includes(':') && <span className="game-meta variation">{item.opening.slice(item.opening.indexOf(':') + 1).trim()}</span>}
                       <span className="game-meta">
                         vs {item.opponent} · <span className={`result ${item.result}`}>{RESULT_LABEL[item.result]}</span> as{' '}
                         {item.userColor === 'white' ? 'White' : 'Black'}
@@ -499,6 +506,20 @@ export function GamesView({ active }: { active: boolean }) {
 
   const movesTab = (
     <div className="moves-tab">
+      {game && review && (
+        <GameCard game={game} mine={review.mine} theirs={review.theirs}>
+          <EvalGraph
+            points={review.series}
+            sans={plies.map(item => item.san)}
+            current={line ? -1 : ply}
+            keyPly={game.keyMoment?.ply ?? null}
+            onSelect={next => {
+              setLine(null)
+              setPly(next)
+            }}
+          />
+        </GameCard>
+      )}
       <div className="key-card">
         <div>
           <span className="eyebrow">Key moment</span>
@@ -544,11 +565,6 @@ export function GamesView({ active }: { active: boolean }) {
           </button>
         </div>
       </div>
-      {game && (
-        <p className="muted small error-count">
-          Mistakes and blunders (100 cp or more): you {errors.mine} · opponent {errors.theirs}
-        </p>
-      )}
       {line ? (
         <>
           <p className="line-note">

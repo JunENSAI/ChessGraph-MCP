@@ -18,7 +18,7 @@ The Vite dev server proxies `/api` to `BACKEND_URL` (default
 | `GET /api/games/{id}` | One game |
 | `GET /api/games/{id}/moves` | Ordered moves |
 | `GET /api/player` | Summary for `CHESS_USERNAME` when `username` is omitted |
-| `GET /api/lessons/openings?color=` | Opening lines to drill for one colour |
+| `GET /api/lessons/openings?color=` | Opening lines to drill for one colour, with games and W/D/L from your side |
 | `GET /api/lessons/endgames` | Endgame benchmarks for the player's rating tier |
 | `GET /api/coach/brief` | Strengths, weakest family, repeated mistakes, four tasks |
 | `GET /api/coach/plan` | Ranked training plan |

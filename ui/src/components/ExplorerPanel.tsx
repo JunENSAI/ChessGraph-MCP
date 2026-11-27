@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { BookOpen, Cpu } from 'lucide-react'
 import { explorerRows, formatScore, type ExplorerJson } from '../lib/explorer'
 import { loadExplorer } from '../services/explorer'
+import { ScoreBar } from './ScoreBar'
 
 interface ExplorerPanelProps {
   fen: string
@@ -64,10 +65,12 @@ export function ExplorerPanel({ fen, active, onPreview, onOpenGame }: ExplorerPa
           <span className="eyebrow">Your games here</span>
           <strong>{games.total_games}</strong>
           {games.total_games > 0 && (
-            <span className="small">
-              <span className="result win">{games.owner_wins}W</span> <span className="result draw">{games.owner_draws}D</span>{' '}
-              <span className="result loss">{games.owner_losses}L</span>
-            </span>
+            <>
+              <span className="small">
+                {games.owner_wins}W {games.owner_draws}D {games.owner_losses}L
+              </span>
+              <ScoreBar wins={games.owner_wins} draws={games.owner_draws} losses={games.owner_losses} label="Your games here" />
+            </>
           )}
         </div>
       </div>
