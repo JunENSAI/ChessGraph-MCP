@@ -229,3 +229,34 @@ class TheoryExit(GraphModel):
 class TheoryExits(GraphModel):
     by: Literal["all", "owner", "opponent"]
     exits: list[TheoryExit] = Field(default_factory=list)
+
+
+class NearbyMistake(GraphModel):
+    """A position within a few plies where the owner went wrong in stored games."""
+
+    position: Position
+    distance: int = Field(description="Plies from the asked position along played moves; 0 is the position itself.")
+    games: int
+    average_cp_loss: float | None = None
+    max_cp_loss: int | None = None
+    played_moves: list[str] = Field(default_factory=list, description="The owner's moves there, SAN.")
+    best_moves: list[str] = Field(default_factory=list, description="Stored engine moves there, UCI.")
+
+
+class StyleContext(GraphModel):
+    """The owner's own record around one position, read in one bounded query."""
+
+    fen_norm: str
+    depth: int
+    position: Position | None = None
+    opening: str | None = Field(default=None, description="Exact opening name of the position, if it has one.")
+    opening_families: list[str] = Field(default_factory=list)
+    owner_moves: list[PositionMove] = Field(default_factory=list)
+    opponent_moves: list[PositionMove] = Field(default_factory=list)
+    theory_moves: list[PositionMove] = Field(default_factory=list)
+    total_games: int = 0
+    owner_wins: int = 0
+    owner_draws: int = 0
+    owner_losses: int = 0
+    recent_games: list[GameVisit] = Field(default_factory=list)
+    nearby_mistakes: list[NearbyMistake] = Field(default_factory=list)

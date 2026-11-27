@@ -234,9 +234,21 @@ def create_app(
             player=configured_player(None),
         )
 
-        def events():
-            for event in provider.run(body, ctx):
-                yield f"data: {json.dumps(event, default=str)}\n\n"
+        def frame(event: dict) -> str:
+            return f"data: {json.dumps(event, default=str)}\n\n"
+
+        stream = provider.run(body, ctx)
+        if hasattr(stream, "__aiter__"):
+
+            async def events():
+                async for event in stream:
+                    yield frame(event)
+
+        else:
+
+            def events():
+                for event in stream:
+                    yield frame(event)
 
         return StreamingResponse(
             events(),

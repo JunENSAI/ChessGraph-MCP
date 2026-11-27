@@ -308,3 +308,80 @@ def run_tool(name: str, raw_input: Any, ctx: ToolContext) -> ToolOutcome:
     except Exception as exc:  # noqa: BLE001 - a down store is evidence that is missing
         return ToolOutcome(False, f"{name}: {tool.source} is unavailable ({type(exc).__name__}).")
     return ToolOutcome(True, json.dumps(data, default=str), data)
+
+
+# --------------------------------------------------------------------------- graph context
+
+GRAPH_CONTEXT_CHARS = 6000
+STAT_KEYS = ("games", "wins", "draws", "losses", "score_pct", "avg_cp_loss", "mistakes", "blunders", "is_engine_best")
+
+
+def _compact_move(move: Any) -> dict[str, Any]:
+    row = {"move": move.san_move or move.uci_move, "uci": move.uci_move}
+    row.update({key: getattr(move, key) for key in STAT_KEYS if getattr(move, key) not in (None, 0, False)})
+    return row
+
+
+def style_summary(context: Any) -> dict[str, Any]:
+    """The owner's record around a position, reduced to what a coaching answer cites."""
+    position = context.position
+    summary: dict[str, Any] = {"fen": context.fen_norm}
+    if position is not None:
+        summary["position"] = {
+            key: getattr(position, key)
+            for key in ("phase", "eval_cp", "best_move_san")
+            if getattr(position, key) is not None
+        }
+    if context.opening:
+        summary["opening"] = context.opening
+    if context.opening_families:
+        summary["opening_families"] = context.opening_families
+    summary["your_games_here"] = {
+        "games": context.total_games,
+        "wins": context.owner_wins,
+        "draws": context.owner_draws,
+        "losses": context.owner_losses,
+    }
+    summary["your_moves"] = [_compact_move(move) for move in context.owner_moves]
+    summary["opponent_moves"] = [_compact_move(move) for move in context.opponent_moves]
+    summary["book_moves"] = [move.san_move or move.uci_move for move in context.theory_moves]
+    summary["recent_games"] = [
+        {
+            "game_id": visit.game.game_id,
+            "date": visit.game.played_date,
+            "type": visit.game.game_type,
+            "your_color": visit.game.user_color,
+            "result": visit.game.user_outcome,
+        }
+        for visit in context.recent_games
+    ]
+    summary["nearby_mistakes"] = [
+        {
+            "fen": item.position.fen_norm,
+            "plies_away": item.distance,
+            "games": item.games,
+            "average_cp_loss": round(item.average_cp_loss) if item.average_cp_loss is not None else None,
+            "you_played": item.played_moves,
+            "stored_engine_moves": item.best_moves,
+        }
+        for item in context.nearby_mistakes
+    ]
+    return summary
+
+
+def graph_context(fen: str, ctx: ToolContext) -> str | None:
+    """Compact, redacted JSON of the owner's record around ``fen``, or None when Neo4j fails.
+
+    At most GRAPH_CONTEXT_CHARS: nearby mistakes, then recent games, then
+    opponent moves are dropped from the end until it fits.
+    """
+    try:
+        summary = redact(style_summary(ctx.neo4j().get_style_context(fen)), ctx.player)
+    except Exception:  # noqa: BLE001 - missing graph evidence, not a failed answer
+        return None
+    text = json.dumps(summary, separators=(",", ":"), default=str)
+    for key in ("nearby_mistakes", "recent_games", "opponent_moves"):
+        while len(text) > GRAPH_CONTEXT_CHARS and summary[key]:
+            summary[key].pop()
+            text = json.dumps(summary, separators=(",", ":"), default=str)
+    return text if len(text) <= GRAPH_CONTEXT_CHARS else None

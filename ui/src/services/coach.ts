@@ -2,10 +2,10 @@ import type { OrbState } from 'thinking-orbs'
 
 /**
  * Coach transport. The browser posts the question and board context to the
- * retrieval API (`POST /api/coach/chat`), which runs Claude's tool loop over
- * the ChessGraph repositories — or the offline evidence mode when no
- * ANTHROPIC_API_KEY is set — and streams server-sent events back. No model key
- * ever reaches the browser.
+ * retrieval API (`POST /api/coach/chat`), which runs Claude over the
+ * ChessGraph repositories through the local Claude Code login — or the offline
+ * evidence mode when COACH_MODE=offline — and streams server-sent events back.
+ * No credential ever reaches the browser.
  */
 
 export type EvidenceSource = 'postgres' | 'neo4j' | 'stockfish'

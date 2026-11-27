@@ -36,8 +36,10 @@ ChessGraph MCP separates those responsibilities:
 
 - **The retrieval API serves** those same reads to the interface, without asking the model to fetch the page.
 
-- **Claude explains** the combined evidence as a personalized lesson, through the
-  `chessgraph` Claude Code plugin.
+- **Claude explains** the combined evidence as a personalized lesson: in Claude
+  Code through the `chessgraph` plugin, and in the interface through the in-app
+  coach. Both run on your Claude Code login (your subscription); no API key is
+  needed.
 
 > The design principle is simple: **the engine searches, deterministic code
 > validates, the databases provide context, and the model explains only the
@@ -87,7 +89,7 @@ flowchart LR
 
     ui -->|"page facts"| api
     ui -->|"questions (SSE)"| api
-    api -->|"tool loop"| claudeApi["Claude API"]
+    api -->|"Agent SDK, your login"| claudeCode["Claude Code: Opus 5.5, effort low"]
     api -->|"repository reads"| postgres
     api -->|"repository reads"| neo4j
     api -->|"bounded search"| stockfish
@@ -220,6 +222,36 @@ piece placement · side to move · castling rights · en-passant target
 Dropping move counters lets different move orders converge on the same position
 key. Stockfish receives a valid six-field FEN generated from that shared key.
 
+### Graph reliability
+
+The Neo4j graph is a projection of PostgreSQL, so it is checked against it. The
+current load agrees on every count:
+
+| Check | Result |
+| --- | --- |
+| Games | 4,595 in both stores |
+| `REACHED` edges | 393,117 = 388,522 moves + one start per game |
+| `PLAYED_MOVE` `times`, by mover | owner 194,423 and opponent 194,099, the same as PostgreSQL |
+| Results on move edges | wins + draws + losses = games on every edge |
+| `MISTAKE_IN` by severity | 22,262 / 19,301 / 7,695, the same as PostgreSQL |
+| Stale edges, orphan positions | none |
+| Owner `Player` nodes | exactly one |
+
+Two gaps are known, and both are by design:
+
+- `MISTAKE_IN` is stored per ply. A position repeated in one game counts twice.
+- No first endgame position links to an Endgame Atlas pattern. The Atlas only
+  covers 6 pieces or fewer, and a game enters the endgame phase with more.
+
+What this gives the coach is a grounded record of your own style, position by
+position: which moves you choose, how you score with them, what your opponents
+play against you, and where you go wrong. Transpositions share one node. Rerun
+the check after each load:
+
+```bash
+CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py
+```
+
 ## Quick start
 
 ### Prerequisites
@@ -236,7 +268,8 @@ key. Stockfish receives a valid six-field FEN generated from that shared key.
 
 - A local [Stockfish](https://stockfishchess.org/download/) binary
 
-- [Claude Code](https://code.claude.com) for the coaching plugin
+- [Claude Code](https://code.claude.com), logged in with your Claude
+  subscription, for the plugin and the in-app coach
 
 ### 1. Install the project
 
@@ -282,6 +315,9 @@ BACKEND_URL=http://127.0.0.1:8000
 value in `.env`. Do not copy it into `CLAUDE.md`, the plugin, or any tracked file. Search
 budgets and the other limits are documented in
 [`.env.template`](.env.template).
+
+The coach needs no API key. It uses the Claude Code login, so run `claude` once
+and `/login` if you have never done it on this machine.
 
 Both stores must be reachable before the interface or the coaches are useful:
 PostgreSQL on `5432` and Neo4j on `7687`. If Neo4j is down the coach says the
@@ -432,24 +468,41 @@ The coach panel posts to `POST /api/coach/chat`, and the API streams the answer
 back as server-sent events. The UI lights each evidence chip (Games, Graph,
 Stockfish) as the matching tool runs.
 
-The coach has two modes:
+The coach has two modes, set by `COACH_MODE` in `.env`:
 
-- **Claude.** Used when `ANTHROPIC_API_KEY` is set in `.env`.
-  - The API runs a tool loop on the Messages API (`CLAUDE_MODEL`, default
-    `claude-opus-5-5`, with effort `CLAUDE_EFFORT`, default `low`).
-  - It uses fourteen read-only tools that mirror the MCP contracts.
-  - Usernames are replaced by "you" and "opponent" before any tool result
-    leaves the machine.
-  - `CLAUDE_REFUSAL_FALLBACK=default` lets the API retry a refused turn on a
-    fallback model.
-- **Offline evidence.** Used when there is no key, or when `COACH_MODE=offline`
-  is set.
-  - The same tools run in a fixed plan: a position question gets Stockfish plus
-    the graph, a training question gets the coaching brief, and a game question
-    gets the largest mistakes plus a same-root comparison.
+- **Claude** (`claude`, the default). The API runs Claude through the
+  [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview),
+  which starts the Claude Code CLI bundled with it.
+  - The CLI uses your Claude Code login (your subscription). No API key is
+    read or needed.
+  - The model is `claude-opus-5-5` at effort `low` (`CLAUDE_MODEL`,
+    `CLAUDE_EFFORT`).
+  - The session is isolated:
+    - no built-in tools (no shell, no file access);
+    - no user or project settings, hooks or `CLAUDE.md`;
+    - no other MCP servers.
+  - It offers only fourteen read-only coach tools. They mirror the MCP
+    contracts and run in the API process.
+  - **Graph context (GraphRAG).** Before Claude reads the question, one
+    bounded Neo4j read collects your own record around the position: your
+    moves and your opponents' moves with results and average loss, the book
+    moves, your latest games through it, and the positions within two plies
+    where you made stored mistakes. This goes into the prompt as compact JSON
+    of at most 6,000 characters. Claude cites it instead of spending tool
+    rounds on it.
+  - Usernames are replaced by "you" and "opponent" before any tool result or
+    graph context reaches Claude.
+  - A subscription login is for your own use. Anthropic does not allow
+    offering claude.ai login to other people in a product, so a shared
+    deployment would need an API key and a different provider.
+- **Offline evidence** (`offline`). No model is used.
+  - The same tools run in a fixed plan: a position question gets Stockfish
+    plus the graph, a training question gets the coaching brief, and a game
+    question gets the largest mistakes plus a same-root comparison.
   - The results are printed without a model and labelled as offline.
 
-The key stays in the API process. See [`backend/README.md`](backend/README.md).
+If Claude Code is not logged in, the coach says so: run `claude` and `/login`.
+See [`backend/README.md`](backend/README.md).
 
 Other UI commands:
 
@@ -561,6 +614,8 @@ ChessGraph MCP is a local evidence layer, not a complete coaching application.
 It currently provides:
 
 - local stdio MCP servers, packaged as a Claude Code plugin;
+- an in-app coach on your Claude Code login, grounded by a graph-context
+  pre-fetch, with an offline evidence mode;
 - a FastAPI retrieval process for the interface, using the same repositories;
 - read-only runtime tools, with no arbitrary query surface;
 - existing-data analysis over the loaded games;

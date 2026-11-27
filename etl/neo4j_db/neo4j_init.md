@@ -163,6 +163,25 @@ position. Follow `HAS_ENDGAME_TYPE` from that position when a hub exists.
 - **Clocks.** The PGN exports have no `%clk` comments, so `clock_rem_sec` is
   empty in PostgreSQL and the graph has no clock fields.
 
+### Known gaps
+
+- `MISTAKE_IN` is keyed per ply, so a position repeated in one game gives two
+  edges. That is 49,258 edges for 49,147 distinct game and position pairs.
+- `ENTERED_ENDGAME` positions never link to an `EndgamePattern`. The Atlas
+  covers 6 pieces or fewer, and the first endgame-phase position always has
+  more. Use `material_sig` on that position instead.
+
+### Consistency check
+
+`tests/test_integration.py::test_neo4j_graph_agrees_with_postgres` compares the
+graph with PostgreSQL, using read sessions only. It checks the game count,
+REACHED = moves + games, PLAYED_MOVE `times` by mover, W + D + L = games on
+every edge, MISTAKE_IN by severity, and a single owner. Run it after each load:
+
+```bash
+CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py
+```
+
 ---
 
 ## Verification queries

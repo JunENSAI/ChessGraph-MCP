@@ -640,3 +640,221 @@ New tests:
 ### Not done
 
 - No visual regression test: the browser checks above were run by hand.
+
+## Batch 6: the coach runs on the Claude Code login, not an API key
+
+Branch `feat/subscription-coach`.
+
+### Why
+
+- The coach needed a paid `ANTHROPIC_API_KEY`. Without one, the UI only had the
+  offline template.
+- The Claude subscription is already logged in for Claude Code. The Claude
+  Agent SDK can run the coach through that login, with the same tools.
+
+### Changed
+
+- `pyproject.toml`: `claude-agent-sdk>=0.2.189` replaces `anthropic`. The SDK
+  bundles the Claude Code CLI.
+- `backend/coach/providers.py`: `ClaudeProvider` now runs
+  `claude_agent_sdk.query`. Its `run` is an async generator.
+  - It uses `claude-opus-5-5` at effort `low` (`CLAUDE_MODEL`, `CLAUDE_EFFORT`)
+    and the coach system prompt, which replaces Claude Code's own.
+  - Isolation: `tools=[]` (no Bash, Read and so on), `setting_sources=[]` (no
+    user or project settings, hooks or CLAUDE.md) and `strict_mcp_config=True`.
+    Only the fourteen coach tools are offered, through an in-process MCP server
+    (`mcp__coach__*`).
+  - Each tool still goes through `run_tool`: Pydantic validation, then
+    username redaction. One lock serializes the calls, because a single
+    Stockfish process serves the coach.
+  - The SSE events are unchanged (`start`, `tool_start`, `tool_end`, `text`,
+    `done`, `error`), so the UI did not change. Text streams from the SDK's
+    partial messages.
+  - Errors become safe messages: a missing login says to run `claude` and
+    `/login`; a missing CLI, a refusal and the turn cap (`max_turns`, 8) each
+    have their own message. stderr and the prompt are never shown.
+  - Removed: the Messages API loop, `api_error_message`, the refusal-fallback
+    beta, prompt caching parameters.
+- `backend/coach/prompt.py`: `prompt_text` replaces `conversation`. Earlier
+  turns go in as text before the board context, because each question is one
+  `query`.
+- `backend/coach/__init__.py`: `COACH_MODE` is `claude` (default) or
+  `offline`. `ANTHROPIC_API_KEY` and `CLAUDE_REFUSAL_FALLBACK` are gone.
+- `backend/main.py`: `/api/coach/chat` streams both sync providers (offline)
+  and async providers (Claude).
+- `.env.template`: the coach block now describes the login, and notes that it
+  is for personal, local use only.
+- `ui/src/services/coach.ts`: doc comment only. `coach.test.ts`: the error
+  fixture is the login message.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 174 passed, 5 skipped (the opt-in integration tests) |
+| `cd ui && npm test` | 93 passed |
+| `cd ui && npm run build` | built; same chunk-size warning as before |
+| `curl -N POST /api/coach/chat` (start position, live stores, your login) | `start` → `get_coaching_brief` (postgres) → `get_position_moves` (neo4j) → `analyze_position` (stockfish) → text → `done`, in 10.7 s; model `claude-opus-5-5` |
+| Account-name scan of that SSE stream | no match |
+| SDK probe: init message | model `claude-opus-5-5`, tools only `mcp__coach__*`, `apiKeySource: none` (the subscription login) |
+
+In the browser (in-app preview, 1440×900): on Play & train, Coach tab, "Who is
+better here and what is the plan?" got a Claude answer with the Games, Graph
+and Stockfish chips lit and the recommended 1.d4 drawn on the board.
+
+New and rewritten tests in `tests/test_coach.py`: a scripted fake `query` calls
+the real tool handlers. They cover event order and tool sources, redaction of
+tool results, the session options (model, effort, no built-in tools, no
+settings, only coach tools), invalid input and a down store as `is_error`
+results, the turn cap, a refusal, a missing login, CLI and process errors
+without stderr, `prompt_text`, the mode settings, and the async SSE route.
+
+### Not done
+
+- The README still describes the API key. That is batch 8.
+
+## Batch 7: graph context for the coach (GraphRAG), and graph invariants
+
+### Why
+
+- **The graph is reliable.** A read-only audit compared Neo4j with
+  PostgreSQL. Every check agreed:
+  - 4,595 games;
+  - REACHED = 388,522 moves + 4,595 starts;
+  - PLAYED_MOVE `times` summed by mover = 194,423 owner and 194,099 opponent
+    moves, the same as PostgreSQL;
+  - wins + draws + losses = games on every edge;
+  - MISTAKE_IN = 22,262 inaccuracies, 19,301 mistakes and 7,695 blunders, the
+    same as PostgreSQL;
+  - no stale edge, no orphan position, and exactly one owner Player.
+- **Two gaps are known and by design.**
+  - MISTAKE_IN is stored per ply: 49,258 edges for 49,147 distinct game and
+    position pairs, because repetitions are not collapsed.
+  - No ENTERED_ENDGAME position links to an Endgame Atlas pattern. The Atlas
+    only covers 6 pieces or fewer, and the first endgame position always has
+    more.
+- **So the graph is grounded evidence of the player's style.** It records
+  which moves you choose, how you score with them, and where you go wrong,
+  position by position, transpositions included.
+- **Pre-fetching it is cheaper.** Through Claude Code, every tool round is a
+  full Opus turn. Before this batch, a position question spent 2 to 4 rounds
+  on graph tools. "Mistakes near this position" was not reachable from the
+  in-app coach at all.
+- **It is retrieval by key, with no embeddings.** It is a lookup by
+  `fen_norm` plus a bounded walk, so no vector search is needed.
+
+### Changed
+
+- `chess_mcp/neo4j/repository.py`: `get_style_context(fen, depth=2, limit=5)`,
+  a single read transaction. It returns:
+  - your moves, opponents' moves and book moves from the position;
+  - the exact opening and its families;
+  - your record from the position, with your latest games through it;
+  - the positions within `depth` plies along played moves where you made
+    stored mistakes, ranked by the number of games.
+
+  `depth` is clamped to `NEO4J_MAX_PATH_DEPTH` (at most 4) and checked against
+  the 1..4 whitelist before it is spliced into the query. `limit` goes through
+  `clamp_limit`. A position missing from the graph returns an empty context.
+- `chess_mcp/neo4j/models.py`: `StyleContext`, `NearbyMistake`.
+- `backend/coach/tools.py`: `graph_context(fen, ctx)` turns the result into
+  compact JSON. Usernames are redacted. The output is capped at 6,000
+  characters by dropping nearby mistakes, then recent games, then opponent
+  moves. It returns `None` when Neo4j fails.
+- `backend/coach/providers.py`: before Claude reads the question,
+  `ClaudeProvider` fetches the graph context, reported as
+  `get_style_context` on the Graph chip, and adds it to the prompt. An
+  explanation of a move just played skips it.
+- `backend/coach/prompt.py`: `user_turn` and `prompt_text` take the block.
+  The system prompt gains one rule: cite the graph context rather than
+  re-reading the same position with tools.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 181 passed, 7 skipped (the opt-in integration tests) |
+| `CHESSGRAPH_RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` | 7 passed, including the two new tests |
+| `PROFILE` of the nearby-mistakes walk | from the start position, 3,129 db hits at depth 2 and 16,851 at depth 4; after 1.e4 or 1.d4, under 0.05 s |
+| `get_style_context` live | start position: 1.19 s cold, 19,829 characters raw; after 1.d4: 0.07 s; an unknown endgame position: empty |
+| `curl -N POST /api/coach/chat` after 1.d4 | `get_style_context` (neo4j) → `analyze_position` (stockfish) → answer → `done` in 8.4 s. The answer cites your 1...d5 record (480 games) and a nearby repeated mistake (2...Nf6 against 2.c4, 18 games, 54 cp) |
+| Account-name scan of that SSE stream | no match |
+
+New tests:
+
+- `tests/test_neo4j_repository.py` (3): one read session on the configured
+  database with no write keyword, the FEN normalized, depth clamped to
+  `*0..4`, limit clamped to 100, rows flattened into the model; an unknown
+  position gives an empty context; a depth below 1 is refused.
+- `tests/test_coach.py` (4): the context is fetched first and its JSON is in
+  the prompt; it is skipped when Neo4j is down; it is skipped for a played-move
+  explanation; it is redacted and bounded, and trimmed from the end.
+- `tests/test_integration.py` (2):
+  - `test_neo4j_graph_agrees_with_postgres` turns the audit into assertions:
+    game count, REACHED = moves + games, PLAYED_MOVE `times` by mover,
+    W + D + L = games, MISTAKE_IN by severity, one owner.
+  - `get_style_context` from the start position.
+
+## Batch 8: README and docs for the subscription coach and the graph
+
+### Changed
+
+- `README.md`:
+  - The intro, the architecture diagram and the prerequisites now describe the
+    Claude Code login: the API calls Claude Code through the Agent SDK. The
+    API key is gone.
+  - Quick start step 2 says to run `claude` and `/login` once.
+  - "The in-app coach" is rewritten to cover:
+    - the two modes;
+    - the isolated session;
+    - the graph-context pre-fetch;
+    - redaction;
+    - the personal-use limit of a subscription login.
+  - The new "Graph reliability" section has the audit numbers, the two known
+    gaps, and the command that rechecks them.
+  - "Current scope" lists the in-app coach.
+- `backend/README.md`: the coach section covers `graph_context`, the Agent SDK
+  provider and its options. The settings table drops `ANTHROPIC_API_KEY` and
+  `CLAUDE_REFUSAL_FALLBACK`.
+- `etl/neo4j_db/neo4j_init.md`: adds the known gaps and the consistency check.
+- `CLAUDE.md`: the layout line for `backend/coach/`.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 181 passed, 7 skipped |
+| `claude plugin validate plugins/chessgraph` | passed |
+| Search of the docs for `ANTHROPIC_API_KEY`, the API loop and the refusal fallback | none left outside this changelog |
+
+## Review fixes for batches 6–8
+
+A code review of the pull request found these. All are in
+`backend/coach/providers.py` unless noted.
+
+### Changed
+
+- **No silent API billing.** `chess_mcp/config.py` loads `.env` into the
+  process environment, and the CLI inherits it. A leftover `ANTHROPIC_API_KEY`
+  line would have made the coach bill the API instead of using the login. The
+  session options now set `env={"ANTHROPIC_API_KEY": ""}`.
+- **Turn cap notice.** When Claude reaches the 8-turn cap, the answer now ends
+  with "I stopped after the maximum number of tool rounds." The Messages API
+  loop did this. Without it, the UI kept and cached the text written before the
+  tool calls as if it were the full answer.
+- **Separate messages stay apart.** Text that Claude writes before a tool round
+  and after it is now separated by a blank line instead of running together.
+- `backend/coach/prompt.py`: the system prompt's evidence-order line now says
+  the graph context is already retrieved, and is read with the stored games
+  before Stockfish.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `uv run pytest` | 182 passed, 7 skipped |
+| SDK probe with `ANTHROPIC_API_KEY` set to a fake key in the environment and the new option | `apiKeySource: none`, answered on the login |
+
+New and changed tests in `tests/test_coach.py`: the session options blank the
+key, the turn cap ends with the notice before `done`, and text from two
+messages is joined with a blank line.

@@ -15,6 +15,7 @@ from chess_mcp.neo4j.models import (
     PositionContext,
     PositionMoves,
     RecurringBlunders,
+    StyleContext,
     TheoryExits,
     TranspositionResult,
 )
@@ -382,3 +383,62 @@ def test_position_moves_sort_by_games_before_book_moves() -> None:
     order = POSITION_MOVES_CYPHER[POSITION_MOVES_CYPHER.index("ORDER BY") :]
     assert order.index("coalesce(r.games, 0) DESC") < order.index("THEORY_MOVE")
     assert order.index("THEORY_MOVE") < order.index("size(coalesce(r.eco_codes, [])) DESC") < order.index("r.san_move")
+
+
+def test_style_context_is_one_bounded_read_and_flattens_moves() -> None:
+    target = position("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -")
+    owner_move = {"uci_move": "e2e4", "san_move": "e4", "by": "owner", "games": 9, "wins": 5, "draws": 2, "losses": 2}
+    driver = FakeDriver(
+        [
+            [
+                {
+                    "position": position(),
+                    "opening": None,
+                    "opening_families": [],
+                    "owner_moves": [{"relationship": "PLAYED_MOVE", "move": owner_move, "target": target}],
+                    "opponent_moves": [],
+                    "theory_moves": [
+                        {"relationship": "THEORY_MOVE", "move": {"uci_move": "d2d4", "san_move": "d4", "eco_codes": None}, "target": target}
+                    ],
+                    "total_games": 9,
+                    "owner_wins": 5,
+                    "owner_draws": 2,
+                    "owner_losses": 2,
+                    "recent_games": [{"game": {"game_id": 7, "user_outcome": "win"}, "ply": 0, "owner_to_move": True}],
+                    "nearby_mistakes": [
+                        {"position": target, "distance": 1, "games": 3, "average_cp_loss": 140.5, "max_cp_loss": 300,
+                         "played_moves": ["c5"], "best_moves": ["e7e5"]}
+                    ],
+                }
+            ]
+        ]
+    )
+    repository = Neo4jRepository(driver, settings())  # type: ignore[arg-type]
+
+    result = repository.get_style_context(START_FEN_FULL, depth=9, limit=500)
+
+    assert isinstance(result, StyleContext)
+    assert result.fen_norm == START_FEN
+    assert result.depth == 4  # clamped to MAX_PATH_DEPTH
+    assert result.owner_moves[0].san_move == "e4" and result.owner_moves[0].target.fen_norm == target["fen_norm"]
+    assert result.theory_moves[0].eco_codes == []
+    assert result.recent_games[0].game.game_id == 7
+    assert result.nearby_mistakes[0].distance == 1
+    query, parameters = driver.calls[0]
+    assert parameters == {"fen_norm": START_FEN, "limit": 100}
+    assert "PLAYED_MOVE*0..4" in query
+    assert not any(word in query.upper() for word in ("MERGE", "CREATE", "SET ", "DELETE"))
+    assert driver.session_kwargs == [{"database": "chess", "default_access_mode": READ_ACCESS}]
+    assert driver.sessions[0].execute_read_called
+
+
+def test_style_context_of_an_unknown_position_is_empty() -> None:
+    repository = Neo4jRepository(FakeDriver([[]]), settings())  # type: ignore[arg-type]
+    result = repository.get_style_context(START_FEN)
+    assert result == StyleContext(fen_norm=START_FEN, depth=2)
+
+
+def test_style_context_rejects_a_depth_below_one() -> None:
+    repository = Neo4jRepository(FakeDriver([]), settings())  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        repository.get_style_context(START_FEN, depth=0)

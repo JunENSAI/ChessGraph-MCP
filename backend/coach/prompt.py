@@ -16,11 +16,12 @@ Voice: calm, direct, specific. Name the feature of the position, then the plan t
 
 Evidence rules:
 - State only what the tools returned in this conversation. Never invent an evaluation, a line, a rating, a game or a habit.
-- Order: stored games (postgres tools), then the position graph (neo4j tools), then fresh Stockfish analysis. Use validate_line before citing a continuation longer than the engine's own principal variation.
+- Order: stored games (postgres tools), then the position graph (neo4j tools), then fresh Stockfish analysis. The graph context in the user turn is already retrieved; read it with the stored games, before Stockfish. Use validate_line before citing a continuation longer than the engine's own principal variation.
 - Engine scores are from the side to move at the root. Say "mate in N" for mate scores. Cite the depth only from limit.value in the tool result.
 - A stored evaluation (cp_loss, best_move_uci in the games) is historical; a Stockfish call is fresh. Do not mix them up.
 - Endgame type is not stored on games: never claim an endgame weakness from the coaching brief.
 - If a tool fails or returns nothing that the question needed, say that evidence is missing in one clause and stop. Do not fill the gap.
+- The user turn may carry "Graph context": the player's own record from the position graph (your_moves and opponent_moves with games, results, score_pct and average centipawn loss; book moves; recent games; nearby_mistakes within a few plies). It is evidence already retrieved: cite it instead of calling get_position_moves or get_games_through_position for the same position.
 
 Answer shape (the app parses the last line):
 - For a position question: the evaluation, one move in SAN, and at most two sentences on why.
@@ -57,8 +58,11 @@ class CoachRequest(BaseModel):
     history: list[HistoryTurn] = Field(default_factory=list, max_length=12)
 
 
-def user_turn(request: CoachRequest) -> str:
-    """The text of the user turn: board context first, then the question."""
+GRAPH_CONTEXT_HEADER = "Graph context (read-only evidence from my stored games, JSON):"
+
+
+def user_turn(request: CoachRequest, graph: str | None = None) -> str:
+    """The text of the user turn: board context, then graph context, then the question."""
     subject = "training board" if request.view == "training" else "position from one of my games"
     lines = [f"Current position (FEN): {request.fen}", f"Context: {subject}."]
     if request.summary:
@@ -73,24 +77,19 @@ def user_turn(request: CoachRequest) -> str:
             f"Stockfish evaluation before it, from the side to move: {request.played.eval_text}."
         )
         lines.append(EXPLAIN_PLAYED_INSTRUCTION)
+    if graph:
+        lines += [GRAPH_CONTEXT_HEADER, graph]
     lines += ["", request.question.strip()]
     return "\n".join(lines)
 
 
-def conversation(request: CoachRequest) -> list[dict[str, str]]:
-    """Prior text turns (no tool traffic) followed by the new user turn."""
-    messages: list[dict[str, str]] = []
-    for turn in request.history:
-        role = "user" if turn.role == "user" else "assistant"
-        if messages and messages[-1]["role"] == role:
-            messages[-1]["content"] += "\n\n" + turn.text
-        else:
-            messages.append({"role": role, "content": turn.text})
-    # The API needs the conversation to start with a user turn.
-    while messages and messages[0]["role"] != "user":
-        messages.pop(0)
-    if messages and messages[-1]["role"] == "user":
-        messages[-1]["content"] += "\n\n" + user_turn(request)
-    else:
-        messages.append({"role": "user", "content": user_turn(request)})
-    return messages
+def prompt_text(request: CoachRequest, graph: str | None = None) -> str:
+    """One prompt for a one-shot Claude Code query: earlier turns as text, then the user turn."""
+    earlier = [
+        f"{'Me' if turn.role == 'user' else 'Coach'}: {turn.text.strip()}"
+        for turn in request.history
+        if turn.text.strip()
+    ]
+    if not earlier:
+        return user_turn(request, graph)
+    return "Earlier in this conversation:\n" + "\n\n".join(earlier) + "\n\n---\n\n" + user_turn(request, graph)

@@ -1,20 +1,21 @@
-"""In-app coach: the Claude tool loop (scripted fake client), offline mode, tools, route."""
+"""In-app coach: Claude via the Agent SDK (scripted fake query), offline mode, tools, route."""
 
 from __future__ import annotations
 
+import asyncio
 import json
-from types import SimpleNamespace
 from typing import Any
 
-import anthropic
-import httpx2
 import pytest
+from claude_agent_sdk import CLINotFoundError, ProcessError, ResultMessage, StreamEvent
 from fastapi.testclient import TestClient
 
+import backend.coach.providers as providers
 from backend.coach import ClaudeProvider, CoachRequest, OfflineProvider, ToolContext, provider_from_settings
-from backend.coach.prompt import SYSTEM_PROMPT, conversation
-from backend.coach.providers import FALLBACK_BETA, api_error_message, format_score
-from backend.coach.tools import TOOLS, redact, run_tool, tool_definitions
+from backend.coach.prompt import GRAPH_CONTEXT_HEADER, SYSTEM_PROMPT, prompt_text
+from backend.coach.providers import format_score, sdk_error_message
+from backend.coach.tools import GRAPH_CONTEXT_CHARS, TOOLS, graph_context, redact, run_tool, tool_definitions
+from chess_mcp.neo4j.models import StyleContext
 from backend.main import create_app
 
 OWNER = "OwnerAccount"
@@ -84,6 +85,8 @@ class FakePostgres:
 class FakeNeo4j:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
+        self.opening: str | None = "Queen's Pawn Game"
+        self.nearby = 1
 
     def get_position_moves(self, fen: str, limit: int = 20, by: str = "all"):
         if self.fail:
@@ -100,6 +103,31 @@ class FakeNeo4j:
         elif by != "all":
             moves = [m for m in moves if m.get("by") == by]
         return {"fen_norm": fen, "moves": moves[:limit]}
+
+    def get_style_context(self, fen: str, depth: int = 2, limit: int = 5) -> StyleContext:
+        if self.fail:
+            raise ConnectionError("bolt down")
+        target = {"fen_norm": START}
+        return StyleContext.model_validate(
+            {
+                "fen_norm": fen,
+                "depth": depth,
+                "position": {"fen_norm": fen, "phase": "opening", "eval_cp": 30, "best_move_san": "e4"},
+                "opening": self.opening,
+                "owner_moves": [
+                    {"relationship": "PLAYED_MOVE", "by": "owner", "uci_move": "e2e4", "san_move": "e4", "games": 9,
+                     "wins": 5, "draws": 2, "losses": 2, "avg_cp_loss": 12, "target": target}
+                ],
+                "theory_moves": [{"relationship": "THEORY_MOVE", "uci_move": "d2d4", "san_move": "d4", "target": target}],
+                "total_games": 11,
+                "owner_wins": 6,
+                "nearby_mistakes": [
+                    {"position": {"fen_norm": f"{START} {i}"}, "distance": 1, "games": 3, "average_cp_loss": 140.4,
+                     "played_moves": ["c4"], "best_moves": ["d2d4"]}
+                    for i in range(self.nearby)
+                ],
+            }
+        )
 
     def get_theory_exits(self, limit: int = 20, by: str = "owner"):
         return {"by": by, "exits": [{"played_uci": "c2c4", "games": 3, "limit": limit}]}
@@ -144,181 +172,220 @@ def make_ctx(neo4j_fail: bool = False) -> ToolContext:
     return ToolContext(postgres=lambda: pg, neo4j=lambda: graph, stockfish=lambda: sf, player=OWNER)
 
 
-def text_block(text: str):
-    return SimpleNamespace(type="text", text=text)
+def fake_server(name: str, version: str = "1.0.0", tools: list[Any] | None = None) -> dict[str, Any]:
+    """Stands in for create_sdk_mcp_server so a scripted query can call the handlers."""
+    return {"type": "sdk", "name": name, "tools": {tool.name: tool for tool in tools or []}}
 
 
-def tool_block(block_id: str, name: str, args: dict[str, Any]):
-    return SimpleNamespace(type="tool_use", id=block_id, name=name, input=args)
+def script(monkeypatch, steps: list[Any]) -> list[dict[str, Any]]:
+    """Replace the SDK query with a script.
+
+    A step is an SDK message to yield, an exception to raise, or
+    ``("tool", name, args)`` to call that coach tool the way Claude Code would.
+    """
+    calls: list[dict[str, Any]] = []
+
+    async def fake_query(*, prompt: str, options: Any):
+        calls.append({"prompt": prompt, "options": options})
+        tools = options.mcp_servers["coach"]["tools"]
+        for step in steps:
+            if isinstance(step, Exception):
+                raise step
+            if isinstance(step, tuple):
+                _, name, args = step
+                calls.append({"tool": name, "result": await tools[name].handler(args)})
+                continue
+            yield step
+
+    monkeypatch.setattr(providers, "create_sdk_mcp_server", fake_server)
+    monkeypatch.setattr(providers, "query", fake_query)
+    return calls
 
 
-class FakeStream:
-    def __init__(self, message: Any) -> None:
-        self.message = message
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def __iter__(self):
-        for block in self.message.content:
-            if block.type == "text":
-                yield SimpleNamespace(type="text", text=block.text)
-
-    def get_final_message(self):
-        return self.message
+def delta(text: str) -> StreamEvent:
+    event = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+    return StreamEvent(uuid="u", session_id="s", event=event)
 
 
-class FakeMessages:
-    def __init__(self, script: list[Any]) -> None:
-        self.script = list(script)
-        self.calls: list[dict[str, Any]] = []
-
-    def stream(self, **params: Any) -> FakeStream:
-        # Snapshot the messages: the provider keeps appending to the same list.
-        self.calls.append({**params, "messages": list(params["messages"])})
-        if not self.script:
-            raise AssertionError("unexpected extra API call")
-        item = self.script.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return FakeStream(item)
+def result(subtype: str = "success", *, is_error: bool = False, stop_reason: str | None = "end_turn", text: str | None = None) -> ResultMessage:
+    return ResultMessage(
+        subtype=subtype, duration_ms=1, duration_api_ms=1, is_error=is_error, num_turns=1,
+        session_id="s", stop_reason=stop_reason, result=text,
+    )
 
 
-class FakeClient:
-    def __init__(self, script: list[Any]) -> None:
-        self.messages = FakeMessages(script)
-        self.beta = SimpleNamespace(messages=self.messages)
+def collect(provider: Any, req: CoachRequest, ctx: ToolContext) -> list[dict[str, Any]]:
+    async def run() -> list[dict[str, Any]]:
+        return [event async for event in provider.run(req, ctx)]
 
-
-def message(stop_reason: str, *blocks: Any):
-    return SimpleNamespace(stop_reason=stop_reason, content=list(blocks))
+    return asyncio.run(run())
 
 
 def request(**overrides: Any) -> CoachRequest:
     return CoachRequest(**{"question": "What should I play?", "fen": START, **overrides})
 
 
-# --------------------------------------------------------------------------- Claude loop
+# --------------------------------------------------------------------------- Claude (Agent SDK)
 
 
-def test_claude_loop_runs_parallel_tools_and_returns_results_in_one_message() -> None:
-    client = FakeClient(
+def test_claude_streams_text_and_reports_each_tool_call(monkeypatch) -> None:
+    calls = script(
+        monkeypatch,
         [
-            message(
-                "tool_use",
-                text_block("Checking. "),
-                tool_block("t1", "get_player_summary", {}),
-                tool_block("t2", "analyze_position", {"fen": START}),
-            ),
-            message("end_turn", text_block("EVAL +0.35. MOVE: e4\nPLAY: e2e4 e7e5")),
-        ]
+            delta("Checking. "),
+            ("tool", "get_player_summary", {}),
+            ("tool", "analyze_position", {"fen": START}),
+            delta("EVAL +0.35. MOVE: e4\nPLAY: e2e4 e7e5"),
+            result(),
+        ],
     )
-    provider = ClaudeProvider(client, refusal_fallback=False)
-
-    events = list(provider.run(request(), make_ctx()))
+    events = collect(ClaudeProvider(), request(), make_ctx())
 
     kinds = [event["type"] for event in events]
-    assert kinds == ["start", "text", "tool_start", "tool_end", "tool_start", "tool_end", "text", "done"]
-    assert events[2] == {"type": "tool_start", "tool": "get_player_summary", "source": "postgres"}
-    assert events[4]["source"] == "stockfish"
+    assert kinds == ["start", "tool_start", "tool_end", "text", "tool_start", "tool_end", "tool_start", "tool_end", "text", "done"]
+    assert events[0] == {"type": "start", "mode": "claude", "model": "claude-opus-5-5"}
+    assert events[1] == {"type": "tool_start", "tool": "get_style_context", "source": "neo4j"}
+    assert events[4] == {"type": "tool_start", "tool": "get_player_summary", "source": "postgres"}
+    assert events[6]["source"] == "stockfish"
     assert all(event["ok"] for event in events if event["type"] == "tool_end")
+    assert events[-1] == {"type": "done", "mode": "claude", "stop_reason": "end_turn"}
 
-    second = client.messages.calls[1]["messages"]
-    assert second[-2]["role"] == "assistant"
-    results = second[-1]["content"]
-    assert [result["tool_use_id"] for result in results] == ["t1", "t2"]
-    assert not any(result.get("is_error") for result in results)
-    # The account name never reaches the API.
-    assert OWNER.casefold() not in json.dumps(second, default=str).casefold()
-    assert json.loads(results[0]["content"])["username"] == "you"
+    summary = calls[1]["result"]
+    assert "is_error" not in summary
+    # The account name never reaches Claude.
+    assert OWNER.casefold() not in json.dumps([c.get("result") for c in calls[1:]]).casefold()
+    assert json.loads(summary["content"][0]["text"])["username"] == "you"
 
 
-def test_claude_request_parameters() -> None:
-    client = FakeClient([message("end_turn", text_block("Done."))])
-    list(ClaudeProvider(client, model="claude-opus-5-5", effort="low").run(request(), make_ctx()))
+def test_claude_options_isolate_the_session_to_the_coach_tools(monkeypatch) -> None:
+    calls = script(monkeypatch, [result()])
+    collect(ClaudeProvider(model="claude-opus-5-5", effort="low"), request(), make_ctx())
 
-    call = client.messages.calls[0]
-    assert call["model"] == "claude-opus-5-5"
-    assert call["system"] == SYSTEM_PROMPT
-    assert call["output_config"] == {"effort": "low"}
-    assert call["cache_control"] == {"type": "ephemeral"}
-    assert call["betas"] == [FALLBACK_BETA]
-    assert call["fallbacks"] == "default"
-    assert [tool["name"] for tool in call["tools"]] == [tool.name for tool in TOOLS]
-    assert call["messages"][0]["role"] == "user"
-
-
-def test_claude_without_fallback_uses_the_plain_endpoint() -> None:
-    client = FakeClient([message("end_turn", text_block("Done."))])
-    list(ClaudeProvider(client, refusal_fallback=False).run(request(), make_ctx()))
-    assert "betas" not in client.messages.calls[0]
-    assert "fallbacks" not in client.messages.calls[0]
+    options = calls[0]["options"]
+    assert options.model == "claude-opus-5-5"
+    assert options.effort == "low"
+    assert options.system_prompt == SYSTEM_PROMPT
+    assert options.tools == []  # no built-in tools (Bash, Read, ...)
+    assert options.setting_sources == []  # no user/project settings, hooks or CLAUDE.md
+    assert options.strict_mcp_config is True
+    assert options.include_partial_messages is True
+    # A leftover key loaded from .env must not switch the CLI to API billing.
+    assert options.env == {"ANTHROPIC_API_KEY": ""}
+    assert options.allowed_tools == [f"mcp__coach__{tool.name}" for tool in TOOLS]
+    assert set(options.mcp_servers["coach"]["tools"]) == {tool.name for tool in TOOLS}
+    assert calls[0]["prompt"].startswith(f"Current position (FEN): {START}")
 
 
-def test_invalid_tool_input_returns_an_error_result_to_claude() -> None:
-    client = FakeClient(
-        [
-            message("tool_use", tool_block("t1", "analyze_position", {"multipv": 9})),
-            message("end_turn", text_block("Evidence is missing.")),
-        ]
-    )
-    events = list(ClaudeProvider(client, refusal_fallback=False).run(request(), make_ctx()))
+def test_invalid_tool_input_returns_an_error_result_to_claude(monkeypatch) -> None:
+    calls = script(monkeypatch, [("tool", "analyze_position", {"multipv": 9}), result()])
+    events = collect(ClaudeProvider(), request(), make_ctx())
 
-    assert [e["ok"] for e in events if e["type"] == "tool_end"] == [False]
-    result = client.messages.calls[1]["messages"][-1]["content"][0]
-    assert result["is_error"] is True
-    assert "fen" in result["content"]
+    assert [e["ok"] for e in events if e["type"] == "tool_end"] == [True, False]
+    tool_result = calls[1]["result"]
+    assert tool_result["is_error"] is True
+    assert "fen" in tool_result["content"][0]["text"]
 
 
-def test_a_down_store_becomes_an_error_result_not_a_crash() -> None:
-    client = FakeClient(
-        [
-            message("tool_use", tool_block("t1", "get_position_moves", {"fen": START})),
-            message("end_turn", text_block("Graph evidence is missing.")),
-        ]
-    )
-    events = list(ClaudeProvider(client, refusal_fallback=False).run(request(), make_ctx(neo4j_fail=True)))
-    result = client.messages.calls[1]["messages"][-1]["content"][0]
-    assert result["is_error"] is True
-    assert "neo4j is unavailable" in result["content"]
+def test_a_down_store_becomes_an_error_result_not_a_crash(monkeypatch) -> None:
+    calls = script(monkeypatch, [("tool", "get_position_moves", {"fen": START}), result()])
+    events = collect(ClaudeProvider(), request(), make_ctx(neo4j_fail=True))
+    assert calls[1]["result"]["is_error"] is True
+    assert "neo4j is unavailable" in calls[1]["result"]["content"][0]["text"]
     assert events[-1]["type"] == "done"
 
 
-def test_iteration_cap_stops_the_loop() -> None:
-    looping = [message("tool_use", tool_block(f"t{i}", "get_player_summary", {})) for i in range(3)]
-    client = FakeClient(looping)
-    events = list(ClaudeProvider(client, refusal_fallback=False, max_iterations=2).run(request(), make_ctx()))
-    assert len(client.messages.calls) == 2
-    assert events[-1] == {"type": "done", "mode": "claude", "stop_reason": "max_iterations"}
+def test_turn_cap_ends_the_answer_with_a_notice(monkeypatch) -> None:
+    script(monkeypatch, [delta("Checking."), result("error_max_turns", is_error=True, stop_reason=None)])
+    events = collect(ClaudeProvider(), request(), make_ctx())
+    assert events[-2] == {"type": "text", "text": providers.MAX_TURNS_NOTE}
+    assert events[-1] == {"type": "done", "mode": "claude", "stop_reason": "max_turns"}
 
 
-def test_refusal_ends_with_an_error_event() -> None:
-    client = FakeClient([message("refusal")])
-    events = list(ClaudeProvider(client).run(request(), make_ctx()))
+def message_start() -> StreamEvent:
+    return StreamEvent(uuid="u", session_id="s", event={"type": "message_start", "message": {}})
+
+
+def test_text_of_separate_messages_is_kept_apart(monkeypatch) -> None:
+    script(
+        monkeypatch,
+        [message_start(), delta("Checking."), ("tool", "get_player_summary", {}), message_start(), delta("MOVE: e4"), result()],
+    )
+    events = collect(ClaudeProvider(), request(), make_ctx())
+    text = "".join(event["text"] for event in events if event["type"] == "text")
+    assert text == "Checking.\n\nMOVE: e4"
+
+
+def test_refusal_ends_with_an_error_event(monkeypatch) -> None:
+    script(monkeypatch, [result(stop_reason="refusal")])
+    events = collect(ClaudeProvider(), request(), make_ctx())
     assert events[-1]["type"] == "error"
     assert "declined" in events[-1]["message"]
 
 
-def test_pause_turn_is_resent() -> None:
-    client = FakeClient([message("pause_turn", text_block("…")), message("end_turn", text_block("Done."))])
-    events = list(ClaudeProvider(client, refusal_fallback=False).run(request(), make_ctx()))
-    assert len(client.messages.calls) == 2
-    assert events[-1]["type"] == "done"
+def test_a_missing_login_asks_for_claude_login(monkeypatch) -> None:
+    script(monkeypatch, [result(is_error=True, text="Not logged in · Please run /login")])
+    events = collect(ClaudeProvider(), request(), make_ctx())
+    assert events[-1] == {"type": "error", "message": providers.LOGIN_HINT}
 
 
-def test_api_errors_map_to_safe_messages() -> None:
-    req = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
-    auth = anthropic.AuthenticationError("bad key sk-ant-secret", response=httpx2.Response(401, request=req), body=None)
-    client = FakeClient([auth])
-    events = list(ClaudeProvider(client).run(request(), make_ctx()))
+def test_sdk_errors_map_to_safe_messages(monkeypatch) -> None:
+    script(monkeypatch, [CLINotFoundError()])
+    events = collect(ClaudeProvider(), request(), make_ctx())
     assert events[-1]["type"] == "error"
-    assert "ANTHROPIC_API_KEY" in events[-1]["message"]
-    assert "sk-ant" not in events[-1]["message"]
-    assert "reach" in api_error_message(anthropic.APIConnectionError(request=req))
-    assert api_error_message(RuntimeError("x")) == "The coach failed (RuntimeError)."
+    assert "CLI was not found" in events[-1]["message"]
+
+    secret = ProcessError("Command failed", exit_code=1, stderr="prompt with private text")
+    assert "private" not in sdk_error_message(secret)
+    assert sdk_error_message(ProcessError("x", stderr="Not logged in")) == providers.LOGIN_HINT
+    assert sdk_error_message(RuntimeError("x")) == "The coach failed (RuntimeError)."
+
+
+def test_graph_context_is_fetched_first_and_put_in_the_prompt(monkeypatch) -> None:
+    calls = script(monkeypatch, [result()])
+    events = collect(ClaudeProvider(), request(), make_ctx())
+
+    assert events[1:3] == [
+        {"type": "tool_start", "tool": "get_style_context", "source": "neo4j"},
+        {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": True},
+    ]
+    prompt = calls[0]["prompt"]
+    block = prompt.split(GRAPH_CONTEXT_HEADER + "\n", 1)[1].split("\n", 1)[0]
+    graph = json.loads(block)
+    assert graph["your_moves"][0] == {"move": "e4", "uci": "e2e4", "games": 9, "wins": 5, "draws": 2, "losses": 2, "avg_cp_loss": 12}
+    assert graph["book_moves"] == ["d4"]
+    assert graph["your_games_here"] == {"games": 11, "wins": 6, "draws": 0, "losses": 0}
+    assert graph["nearby_mistakes"][0]["average_cp_loss"] == 140
+    assert prompt.endswith("What should I play?")
+
+
+def test_graph_context_is_skipped_when_neo4j_is_down(monkeypatch) -> None:
+    calls = script(monkeypatch, [result()])
+    events = collect(ClaudeProvider(), request(), make_ctx(neo4j_fail=True))
+    assert events[2] == {"type": "tool_end", "tool": "get_style_context", "source": "neo4j", "ok": False}
+    assert GRAPH_CONTEXT_HEADER not in calls[0]["prompt"]
+
+
+def test_a_played_move_explanation_skips_the_graph(monkeypatch) -> None:
+    calls = script(monkeypatch, [result()])
+    played = {"san": "Nf6", "color": "black", "eval_text": "+0.20"}
+    events = collect(ClaudeProvider(), request(played=played), make_ctx())
+    assert not [e for e in events if e["type"] == "tool_start"]
+    assert GRAPH_CONTEXT_HEADER not in calls[0]["prompt"]
+
+
+def test_graph_context_is_redacted_and_bounded() -> None:
+    ctx = make_ctx()
+    graph = ctx.neo4j()
+    graph.opening = f"{OWNER} Gambit"
+    graph.nearby = 200
+    text = graph_context(START, ctx)
+    assert text is not None
+    assert len(text) <= GRAPH_CONTEXT_CHARS
+    assert OWNER.casefold() not in text.casefold()
+    data = json.loads(text)
+    assert data["opening"] == "you Gambit"
+    assert 0 < len(data["nearby_mistakes"]) < 200  # trimmed from the end
+    assert data["your_moves"]  # never trimmed
 
 
 # --------------------------------------------------------------------------- offline
@@ -428,22 +495,22 @@ def test_tool_definitions_are_closed_and_untitled() -> None:
     assert tool_definitions() == definitions  # stable for prompt caching
 
 
-def test_conversation_starts_with_user_and_ends_with_the_board_context() -> None:
+def test_prompt_text_puts_earlier_turns_before_the_board_context() -> None:
     req = request(
         history=[
             {"role": "coach", "text": "Welcome."},
             {"role": "user", "text": "Hi"},
-            {"role": "coach", "text": "Hello."},
         ],
         summary="Move 12, after Nf3",
         profile="Weakest: Sicilian",
     )
-    messages = conversation(req)
-    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
-    last = messages[-1]["content"]
+    text = prompt_text(req)
+    assert text.startswith("Earlier in this conversation:\nCoach: Welcome.\n\nMe: Hi")
+    last = text.split("---\n\n", 1)[1]
     assert last.startswith(f"Current position (FEN): {START}")
     assert "My profile: Weakest: Sicilian" in last
     assert last.endswith("What should I play?")
+    assert prompt_text(request()).startswith("Current position (FEN):")
 
 
 # --------------------------------------------------------------------------- route and settings
@@ -479,23 +546,25 @@ def _settings(monkeypatch, **values: str) -> None:
     monkeypatch.setattr("backend.coach.get_setting", lambda name, default="": values.get(name, default))
 
 
-def test_provider_is_offline_without_a_key(monkeypatch) -> None:
-    _settings(monkeypatch)
-    assert provider_from_settings().mode == "offline"
-
-
-def test_provider_is_claude_with_a_key(monkeypatch) -> None:
-    _settings(monkeypatch, ANTHROPIC_API_KEY="sk-ant-test", CLAUDE_EFFORT="bogus", CLAUDE_REFUSAL_FALLBACK="off")
+def test_provider_defaults_to_claude_opus_at_low_effort(monkeypatch) -> None:
+    _settings(monkeypatch, CLAUDE_EFFORT="bogus")
     provider = provider_from_settings()
     assert provider.mode == "claude"
     assert provider.model == "claude-opus-5-5"
     assert provider.effort == "low"
-    assert provider.refusal_fallback is False
 
 
-def test_coach_mode_offline_overrides_a_key(monkeypatch) -> None:
-    _settings(monkeypatch, ANTHROPIC_API_KEY="sk-ant-test", COACH_MODE="offline")
+def test_coach_mode_offline_selects_the_template(monkeypatch) -> None:
+    _settings(monkeypatch, COACH_MODE="offline")
     assert provider_from_settings().mode == "offline"
+
+
+def test_chat_route_streams_an_async_provider(monkeypatch) -> None:
+    monkeypatch.setenv("CHESS_USERNAME", OWNER)
+    script(monkeypatch, [delta("MOVE: e4"), result()])
+    with _app(ClaudeProvider()) as client:
+        events = _sse(client.post("/api/coach/chat", json={"question": "Best move?", "fen": START}))
+    assert [e["type"] for e in events] == ["start", "tool_start", "tool_end", "text", "done"]
 
 
 @pytest.mark.parametrize("question", ["what should I train", "my weakness", "Make a training plan for me", "my mistakes"])
