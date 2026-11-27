@@ -675,6 +675,8 @@ drill in the stores.
 
 - [MCP setup, security, and troubleshooting](docs/mcp.md)
 
+- [Branches and promotion](docs/branching.md)
+
 - [MCP package concepts](chess_mcp/README.md)
 
 - [PostgreSQL server](chess_mcp/postgres/README.md)

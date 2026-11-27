@@ -1266,3 +1266,44 @@ New tests:
 
 The play-day fix lives inside the board component, which has no component test
 in this project. It was not checked in the browser in this pass.
+
+## Branches and promotion
+
+### Why
+
+There were three leftover feature branches and no stated way for a change to
+reach `main`.
+
+### Changed
+
+- **Branches:**
+  - Deleted the merged branches `feat/coach-lines-ui`,
+    `feat/subscription-coach` and `rework/claude-platform`, locally and on
+    GitHub. All three were fully merged into `main`.
+  - Created `chess-coach-test` (integration) and `chess-coach-qa` (staging)
+    from `main` at `d52789a`.
+- **`docs/branching.md`, new:**
+  - the flow `feature/*` → `chess-coach-test` → `chess-coach-qa` → `main`,
+    one level at a time and by pull request;
+  - branch names;
+  - the checks at each gate: fast checks, then integration checks with the
+    local services, then a QA pass in the running app;
+  - keeping the branches in step by merging, never rebasing or
+    force-pushing;
+  - the GitHub branch protection to switch on.
+- `README.md` links the new guide from Documentation.
+- `CLAUDE.md` working rules gain one rule:
+  - work on `feature/` or `fix/` branches cut from `chess-coach-test`;
+  - promote by pull request;
+  - never commit straight to `chess-coach-qa` or `main`, and never force-push
+    them.
+
+### Checks
+
+| Command | Result |
+| :--- | :--- |
+| `git branch -a --merged origin/main` | all three deleted branches were listed as merged |
+| `git ls-remote --heads origin` | `main`, `chess-coach-test` and `chess-coach-qa`, all at `d52789a` |
+| `ls docs/branching.md backend/README.md ui/README.md` | the linked files exist |
+
+Documentation only, so no code tests were needed.

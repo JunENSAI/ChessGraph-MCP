@@ -115,6 +115,11 @@ process. A model key, when one is added, stays server-side and is never a
   commands run and their results.
 - Database writes happen only in `etl/`. The Neo4j database is shared with
   other projects, so chess ETL may only touch chess labels.
+- Branches: work on `feature/<topic>` or `fix/<topic>` cut from
+  `chess-coach-test`. Changes are promoted by pull request:
+  `chess-coach-test`, then `chess-coach-qa`, then `main`. Never commit
+  straight to `chess-coach-qa` or `main`, and never force-push them. See
+  `docs/branching.md`.
 
 ## Layout
 
